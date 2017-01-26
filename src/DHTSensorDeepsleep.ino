@@ -14,8 +14,8 @@ extern "C" {
 
 #define DHTTYPE DHT22
 #define DHTPIN  2
-#define FREQUENCY    160                  // CPU freq; valid 80, 160
-#define DEBUG true
+#define FREQUENCY 160 // CPU freq; valid 80, 160
+//#define DEBUG true
 
 ADC_MODE(ADC_VCC);
 
@@ -37,12 +37,16 @@ DHT dht(DHTPIN, DHTTYPE, 11); // 11 works fine for ESP8266
 void initSerial();
 void toSerial(String str);
 void connectWiFi();
+bool connect(const char* hostName, const int port = 80);
+void disconnect();
+bool sendRequest(const char* host, String resource);
 bool readFromDHT();
 bool readVoltage();
 
 /**
  * WIFI & network stuff
  */
+WiFiClient client;
 const char* ssid     = "freebox_BPBXWW";
 const char* password = "sebspi480700";
 const char* hostTS = "api.thingspeak.com";
@@ -64,21 +68,21 @@ float humidity, temp_f, gVoltage = 0;   // Values read from sensor
 /**
  * General stuff
  */
-const unsigned long BAUD_RATE = 115200; // serial connection speed
+const unsigned long BAUD_RATE = 57600; // serial connection speed
 const String LF = (String)'\x0a';
-unsigned long elapsedtime = 0;
+bool DEBUG = true;
 
 /**
  * setup()
  */
 void setup(void) {
-  if (DEBUG) system_update_cpu_freq(FREQUENCY); // test overclocking...
+  if (DEBUG) {
+    system_update_cpu_freq(FREQUENCY); // test overclocking... en debug only
+    toSerial("CPU Freq set to: " + (String)FREQUENCY); toSerial(LF);
+  }
 
   // open the Arduino IDE Serial Monitor window to see what the code is doing
   initSerial();
-
-  // initialize temperature sensor
-  dht.begin();           
 
   // Connect to WiFi network
   connectWiFi();
@@ -93,10 +97,13 @@ void setup(void) {
     param.writeAPIKey = "5W8JKMZZBRBAT4DX";
     param.idxDomoticz = 48;
     param.sleepTime = 600; // 10 min.
+    // pas de mode DEBUG
+    DEBUG = false;
   }
 
   // read ESP voltage
   readVoltage();
+
   // read temperature & humidity
   if (readFromDHT()) {
     sendThingspeak();
@@ -117,8 +124,7 @@ void setup(void) {
  * loop()
  */
 void loop(void) {
-  // N/A
-  
+  delay(1);
 } 
 
 /**
@@ -139,34 +145,31 @@ bool readVoltage() {
 }
 
 void sendThingspeak() {
-  // Use WiFiClient class to create TCP connections
-  WiFiClient client;
-  const int httpPort = 80;
-  if (!client.connect(hostTS, httpPort)) {
+  if (!connect(hostTS) ) { // default HTTP port is 80, fine for TS
     toSerial("connection to Thingspeak failed"); toSerial(LF);
     return;
   }
 
   // We now create a URI for the request
   String urlT = "/update?key=" + param.writeAPIKey 
-      + "&field1=" + String((float)temp_f) 
-      + "&field2=" + String((float)humidity) 
-      + "&field3=" + String((float)gVoltage) + " ";
-  toSerial("Requesting URL: ");
-  toSerial(urlT); toSerial(LF);
-  client.print(String("GET ") + urlT + " HTTP/1.1\r\n" +
-               "Host: " + hostTS + "\r\n" + 
-               "Connection: close\r\n\r\n");
-  client.stop();
+      + "&field1=" + String((float)temp_f) + "&field2=" + String((float)humidity) 
+      + "&field3=" + (isnan(gVoltage)? "": String((float)gVoltage)) + " ";
+
+  if (!sendRequest(hostTS, urlT)) {
+    toSerial("failed to GET URI!"); toSerial(LF);
+  }
+  disconnect();
 }
 
+/**
+ * sendDomoticz(): send to Domoticz local server
+ */
 void sendDomoticz() {
-  WiFiClient client;
   const int idx = param.idxDomoticz;
   char *humidity_status = "0";
   
-  if (!client.connect(hostDomoticz, httpDomoticzPort)) {
-    toSerial("connection to Domoticz failed"); toSerial(LF);
+  if (!connect(hostDomoticz, httpDomoticzPort)) {
+    toSerial("connection to local Domoticz failed"); toSerial(LF);
     return;
   }
 
@@ -188,16 +191,13 @@ void sendDomoticz() {
 
   // create a URI for the request
   // /json.htm?type=command&param=udevice&idx=IDX&nvalue=0&svalue=TEMP;HUM;HUM_STAT
-  String urlT = "/json.htm?type=command&param=udevice&idx=" + String((int)idx)
-      + "&nvalue=0"
+  String urlT = "/json.htm?type=command&param=udevice&idx=" + String((int)idx) + "&nvalue=0"
       + "&svalue=" + String((float)temp_f) + ";" + String((float)humidity) + ";" + humidity_status;
-  toSerial("Requesting URL: ");
-  toSerial(urlT); 
-  toSerial(LF);
-  client.print(String("GET ") + urlT + " HTTP/1.1\r\n" +
-               "Host: " + hostDomoticz + "\r\n" + 
-               "Connection: close\r\n\r\n");
-  client.stop();
+  
+  if (!sendRequest(hostDomoticz, urlT)) {
+    toSerial("failed to send to Domoticz!"); toSerial(LF);
+  }
+  disconnect();
 }
 
 /**
@@ -222,12 +222,14 @@ void stopWiFiAndSleep() {
 
 // initialize serial port
 void initSerial() {
-  Serial.end();
-  Serial.begin(BAUD_RATE);
-  while (!Serial) {
-    ;  // wait for serial port to initialize
+  if(DEBUG) {
+    Serial.end();
+    Serial.begin(BAUD_RATE);
+    while (!Serial) {
+      ;  // wait for serial port to initialize
+    }
+    Serial.println("Serial ready");
   }
-  if(DEBUG) Serial.println("Serial ready");
 }
 
 /**
@@ -242,14 +244,45 @@ void connectWiFi() {
   toSerial("WiFi mode set to WIFI_STA"); toSerial(LF);
   // connect to the WiFi network
   WiFi.begin(ssid, password);
-  toSerial("Connecting to network");
+  toSerial("Connecting to network... ");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     toSerial(".");
   }
-  toSerial(LF);
-  toSerial("Connected to "); toSerial(ssid); toSerial(LF);
+  toSerial("connected to " + (String)ssid); toSerial(LF);
   toSerial("IP address: " + WiFi.localIP().toString()); toSerial(LF);
+}
+/** 
+ * Open connection to the HTTP server 
+ */
+bool connect(const char* hostName, const int port) {
+  toSerial("Connecting to " + (String)hostName + "... ");
+  bool ok = client.connect(hostName, port);
+  toSerial(ok ? "OK" : "Failed!"); toSerial(LF);
+  return ok;
+}
+/** 
+ * Close the connection with the HTTP server 
+ */
+void disconnect() {
+  toSerial("Disconnect from HTTP server"); toSerial(LF);
+  client.stop();
+}
+/**
+ * Send the HTTP GET request to the server 
+ */
+bool sendRequest(const char* host, String resource) {      
+  toSerial("GET " + resource); toSerial(LF);
+
+  client.print("GET ");     
+  client.print(resource);     
+  client.println(" HTTP/1.1");     
+  client.print("Host: ");     
+  client.println(host);     
+  client.println("Accept: */*");     
+  client.println("Connection: close");     
+  client.println();     
+  return true;  
 }
 
 /**
@@ -258,15 +291,17 @@ void connectWiFi() {
  */
 bool readFromDHT() {
   float hum, temp;
-  
-  delay(5000);  // slow sensor, wait until it wakes up...
 
+  // initialize temperature sensor
+  dht.begin();           
+
+  delay(5000);  // slow sensor, wait until it wakes up...
     
   // Reading temperature or humidity takes about 250 milliseconds!
   // Sensor readings may also be up to 2 seconds 'old' (it's a very slow sensor)
   hum = dht.readHumidity();          // Read humidity (percent)
   temp = dht.readTemperature();     // Read temperature C
-  toSerial("Temperature read: " + (String)(temp)); toSerial(LF);
+  toSerial("Temperature read: " + (String)(temp) + "; "); 
   toSerial("Humidity read: " + (String)(hum)); toSerial(LF);
 
   // Check if any reads failed and exit early (to try again).
@@ -281,4 +316,3 @@ bool readFromDHT() {
 
   return (true);
 }
-
