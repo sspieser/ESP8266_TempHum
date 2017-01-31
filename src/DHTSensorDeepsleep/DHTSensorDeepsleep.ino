@@ -16,7 +16,7 @@ extern "C" {
 #define DHTTYPE DHT22
 #define DHTPIN  2
 #define FREQUENCY 160 // CPU freq; valid 80, 160
-//#define DEBUG true
+#define DEBUG false
 
 ADC_MODE(ADC_VCC);
 
@@ -31,6 +31,11 @@ ADC_MODE(ADC_VCC);
 // Arduino Due that runs at 84mhz a value of 30 works.
 // This is for the ESP8266 processor on ESP-01 
 DHT dht(DHTPIN, DHTTYPE, 11); // 11 works fine for ESP8266
+
+//
+// pour éviter les plantages / blocages / ???, essai des pistes données ici:
+// http://internetofhomethings.com/homethings/?p=396
+//
 
 /**
  * Declaration
@@ -76,13 +81,12 @@ float humidity, temp_f, gVoltage = 0;   // Values read from sensor
  */
 const unsigned long BAUD_RATE = 57600; // serial connection speed
 const String LF = (String)'\x0a';
-bool DEBUG = true;
 const char *FILE_LOG = "/log.log";
 
 /**
  * setup()
  */
-void setup(void) {
+void setup(void) {  
   // open the Arduino IDE Serial Monitor window to see what the code is doing
   initSerial();
   // init the filesystem...
@@ -93,10 +97,6 @@ void setup(void) {
     toSerial("CPU Freq set to: " + (String)FREQUENCY); toSerial(LF);
   }
 
-  if (DEBUG) {
-    //SPIFFS.format();
-  }
-  
   // Connect to WiFi network
   connectWiFi();
 
@@ -110,13 +110,18 @@ void setup(void) {
     param.writeAPIKey = "5W8JKMZZBRBAT4DX";
     param.idxDomoticz = 48;
     param.sleepTime = 600; // 10 min.
-    // pas de mode DEBUG
-    DEBUG = false;
   }
 
   // dump log file (DEBUG)
   if (DEBUG) dumpFS();
 
+  // clear filesystem (to delete log file)
+  if (DEBUG) {
+    /*toSerial("formatting FS...");
+    SPIFFS.format();
+    toSerial("ok."); toSerial(LF); */
+  }
+  
   // read ESP voltage
   readVoltage();
 
@@ -137,6 +142,7 @@ void setup(void) {
   closeFS();
   toSerial("Sleeping for " + (String)param.sleepTime + " sec."); toSerial(LF);
   closeSerial();
+  yield();
   ESP.deepSleep(param.sleepTime * 1000000);
 }
 
@@ -144,7 +150,7 @@ void setup(void) {
  * loop()
  */
 void loop(void) {
-  delay(1);
+  yield();
 } 
 
 /**
@@ -154,14 +160,18 @@ bool readVoltage() {
     float voltage = 0.00f;
     
     voltage = ESP.getVcc() / 1024.00f;
+    yield();
     if (isnan(voltage)) {
       toSerial("Failed to read voltage from DHT sensor!"); toSerial(LF);
       writeToFS("readVoltage:: Failed to read voltage from DHT sensor!");
+      yield();
       return (false);
     } else {
       gVoltage = (float)voltage;
       toSerial("Voltage: " + (String)voltage); toSerial(LF);
     }
+    yield();
+    ESP.wdtFeed();
     return (true);
 }
 
@@ -169,6 +179,7 @@ void sendThingspeak() {
   if (!connect(hostTS) ) { // default HTTP port is 80, fine for TS
     toSerial("connection to Thingspeak failed!"); toSerial(LF);
     writeToFS("sendThingspeak:: connection to Thingspeak failed!");
+    yield();
     return;
   }
 
@@ -180,7 +191,10 @@ void sendThingspeak() {
   if (!sendRequest(hostTS, urlT)) {
     toSerial("failed to GET URI!"); toSerial(LF);
     writeToFS("sendThingspeak:: failed to GET URI!");
+    yield();
   }
+  yield();
+  ESP.wdtFeed();
   disconnect();
 }
 
@@ -194,11 +208,13 @@ void sendDomoticz() {
   if (!connect(hostDomoticz, httpDomoticzPort)) {
     toSerial("connection to local Domoticz failed!"); toSerial(LF);
     writeToFS("sendDomoticz:: connection to local Domoticz failed!");
+    yield();
     return;
   }
 
   if (isnan(humidity) || isnan(temp_f)) {
     toSerial("failed to send to Domoticz: humidity or temperature not available"); toSerial(LF);
+    yield();
     return;
   }
 
@@ -212,6 +228,7 @@ void sendDomoticz() {
   } else {
     humidity_status = "0";
   }
+  yield();
 
   // create a URI for the request
   // /json.htm?type=command&param=udevice&idx=IDX&nvalue=0&svalue=TEMP;HUM;HUM_STAT
@@ -221,10 +238,70 @@ void sendDomoticz() {
   if (!sendRequest(hostDomoticz, urlT)) {
     toSerial("failed to send to Domoticz!"); toSerial(LF);
     writeToFS("sendDomoticz:: failed to send to Domoticz!");
+    yield();
   }
+  yield();
+  ESP.wdtFeed();
   disconnect();
 }
 
+/**
+ * stopWiFiAndSleep
+ */
+void stopWiFiAndSleep() {
+  WiFi.disconnect();
+  yield();
+  WiFi.mode(WIFI_OFF);
+  WiFi.forceSleepBegin();
+  delay(100);
+  ESP.wdtFeed();
+}
+// initialize serial port
+void initSerial() {
+  if(DEBUG) {
+    Serial.begin(BAUD_RATE);
+    yield();
+    while (!Serial) {
+      yield();  // wait for serial port to initialize
+    }
+    Serial.println("Serial ready");
+  }
+}
+/**
+ * initFS
+ */
+void initFS() {
+  SPIFFS.begin();
+  yield();
+}
+void closeSerial() {
+  if(DEBUG) {
+    Serial.end();
+    yield();
+  }
+}
+void closeFS() {
+  SPIFFS.end();
+  yield();
+}
+void dumpFS() {
+  File f;
+  f = SPIFFS.open(FILE_LOG, "r");
+  if (f) {
+    toSerial("================= dumping file" + (String)FILE_LOG); toSerial(LF);
+    while(f.available()) {
+      String line = f.readStringUntil('\n');
+      toSerial(line); toSerial(LF);
+      yield();
+      ESP.wdtFeed();
+    }
+    f.close();
+    yield();
+  } else {
+    toSerial("unable to open/ file not found: " + (String)FILE_LOG + "!"); toSerial(LF);
+    yield();
+  }
+}
 /**
  * toSerial
  * write to serial console (no line feed)
@@ -232,6 +309,8 @@ void sendDomoticz() {
 void toSerial(String str) {
   if (DEBUG) {
     Serial.print(str);
+    Serial.flush();
+    delay(50);
   }
 }
 /**
@@ -243,58 +322,15 @@ void writeToFS(String str) {
   f = SPIFFS.open(FILE_LOG, "a");
   if (!f) {
     toSerial("File open failed!"); toSerial(LF);
+    yield();
     return;
   }
   f.println(str);
   f.close();
+  yield();
+  ESP.wdtFeed();
 }
-/**
- * stopWiFiAndSleep
- */
-void stopWiFiAndSleep() {
-  WiFi.disconnect();
-  WiFi.mode(WIFI_OFF);
-  WiFi.forceSleepBegin();
-  delay(100);
-}
-// initialize serial port
-void initSerial() {
-  if(DEBUG) {
-    Serial.begin(BAUD_RATE);
-    while (!Serial) {
-      ;  // wait for serial port to initialize
-    }
-    Serial.println("Serial ready");
-  }
-}
-/**
- * initFS
- */
-void initFS() {
-  SPIFFS.begin();
-}
-void closeSerial() {
-  if(DEBUG) {
-    Serial.end();
-  }
-}
-void closeFS() {
-  SPIFFS.end();
-}
-void dumpFS() {
-  File f;
-  f = SPIFFS.open(FILE_LOG, "r");
-  if (f) {
-    toSerial("================= dumping file" + (String)FILE_LOG); toSerial(LF);
-    while(f.available()) {
-      String line = f.readStringUntil('\n');
-      toSerial(line); toSerial(LF);
-    }
-    f.close();
-  } else {
-    toSerial("unable to open " + (String)FILE_LOG + "!"); toSerial(LF);
-  }
-}
+
 /**
  * Connect to the local network thru wifi
  */
@@ -309,9 +345,13 @@ void connectWiFi() {
   toSerial("WiFi mode set to WIFI_STA"); toSerial(LF);
   // connect to the WiFi network
   WiFi.begin(ssid, password);
+  yield();
   toSerial("Connecting to network... ");
   while (WiFi.status() != WL_CONNECTED && count++ < 360 /* 3 min */) {
     delay(500);
+    if (count%30 == 0) {
+      ESP.wdtFeed();
+    }
     toSerial(".");
   }
   if (WiFi.status() == WL_CONNECTED) {
@@ -321,6 +361,7 @@ void connectWiFi() {
     toSerial("failed to connected to " + (String)ssid + "!"); toSerial(LF);
     writeToFS("connectWiFi:: failed to connected to " + (String)ssid + "!");
   }
+  yield();
 }
 /** 
  * Open connection to the HTTP server 
@@ -328,6 +369,8 @@ void connectWiFi() {
 bool connect(const char* hostName, const int port) {
   toSerial("Connecting to " + (String)hostName + "... ");
   bool ok = client.connect(hostName, port);
+  yield();
+  ESP.wdtFeed();
   toSerial(ok ? "OK" : "Failed!"); toSerial(LF);
   return ok;
 }
@@ -337,6 +380,7 @@ bool connect(const char* hostName, const int port) {
 void disconnect() {
   toSerial("Disconnect from HTTP server"); toSerial(LF);
   client.stop();
+  yield();
 }
 /**
  * Send the HTTP GET request to the server 
@@ -351,7 +395,8 @@ bool sendRequest(const char* host, String resource) {
   client.println(host);     
   client.println("Accept: */*");     
   client.println("Connection: close");     
-  client.println();     
+  client.println();  
+  yield();   
   return true;  
 }
 
@@ -364,13 +409,15 @@ bool readFromDHT() {
 
   // initialize temperature sensor
   dht.begin();           
-
   delay(5000);  // slow sensor, wait until it wakes up...
     
   // Reading temperature or humidity takes about 250 milliseconds!
   // Sensor readings may also be up to 2 seconds 'old' (it's a very slow sensor)
   hum = dht.readHumidity();          // Read humidity (percent)
+  yield();
+  ESP.wdtFeed();
   temp = dht.readTemperature();     // Read temperature C
+  yield();
   toSerial("Temperature read: " + (String)(temp) + "; "); 
   toSerial("Humidity read: " + (String)(hum)); toSerial(LF);
 
