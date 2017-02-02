@@ -4,33 +4,25 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
-//#include <ESP8266WebServer.h>
 #include <aREST.h>
+#include <Adafruit_Sensor.h>
 #include <DHT.h>
+#include <DHT_U.h>
 #include <ESP.h>
 #include <FS.h>
 extern "C" {
   #include "user_interface.h"
 }
+#include "time_ntp.h"
 
 #define DHTTYPE DHT22
 #define DHTPIN  2
 #define FREQUENCY 160 // CPU freq; valid 80, 160
-#define DEBUG false
+#define DEBUG true
 
 ADC_MODE(ADC_VCC);
-
-//ESP8266WebServer server(80);
  
-// Initialize DHT sensor 
-// NOTE: For working with a faster than ATmega328p 16 MHz Arduino chip, like an ESP8266,
-// you need to increase the threshold for cycle counts considered a 1 or 0.
-// You can do this by passing a 3rd parameter for this threshold.  It's a bit
-// of fiddling to find the right value, but in general the faster the CPU the
-// higher the value.  The default for a 16mhz AVR is a value of 6.  For an
-// Arduino Due that runs at 84mhz a value of 30 works.
-// This is for the ESP8266 processor on ESP-01 
-DHT dht(DHTPIN, DHTTYPE, 11); // 11 works fine for ESP8266
+DHT_Unified dht(DHTPIN, DHTTYPE);
 
 //
 // pour éviter les plantages / blocages / ???, essai des pistes données ici:
@@ -53,6 +45,9 @@ void disconnect();
 bool sendRequest(const char* host, String resource);
 bool readFromDHT();
 bool readVoltage();
+unsigned long getGMTTime();
+unsigned long getWakeUpCount(); // TODO: faire une class C++
+bool incWakeUpCount();
 
 /**
  * WIFI & network stuff
@@ -82,6 +77,7 @@ float humidity, temp_f, gVoltage = 0;   // Values read from sensor
 const unsigned long BAUD_RATE = 57600; // serial connection speed
 const String LF = (String)'\x0a';
 const char *FILE_LOG = "/log.log";
+const char *FILE_WAKECOUNT = "/wakecount.log";
 
 /**
  * setup()
@@ -92,11 +88,13 @@ void setup(void) {
   // init the filesystem...
   initFS();
 
-  if (DEBUG) {
-    system_update_cpu_freq(FREQUENCY); // test overclocking... en debug only
-    toSerial("CPU Freq set to: " + (String)FREQUENCY); toSerial(LF);
-  }
+  // CPU Freq
+  system_update_cpu_freq(FREQUENCY); // test overclocking... ca marche bien donc let's go!
+  toSerial("CPU Freq set to: " + (String)FREQUENCY); toSerial(LF);
 
+  // wake up count, ie, execution start count...
+  incWakeUpCount();
+  
   // Connect to WiFi network
   connectWiFi();
 
@@ -109,7 +107,7 @@ void setup(void) {
     param.channelID = "211804";
     param.writeAPIKey = "5W8JKMZZBRBAT4DX";
     param.idxDomoticz = 48;
-    param.sleepTime = 600; // 10 min.
+    if (!DEBUG) param.sleepTime = 600; // 10 min.
   }
 
   // dump log file (DEBUG)
@@ -117,9 +115,16 @@ void setup(void) {
 
   // clear filesystem (to delete log file)
   if (DEBUG) {
-    /*toSerial("formatting FS...");
-    SPIFFS.format();
-    toSerial("ok."); toSerial(LF); */
+    //toSerial("deleting log file...");
+    //SPIFFS.remove(FILE_LOG);
+    //toSerial("ok."); toSerial(LF);
+  }
+
+  if (DEBUG) {
+    // read current time
+    getGMTTime();
+    // read wake up count
+    toSerial("Wake up count: " + (String)getWakeUpCount()); toSerial(LF);
   }
   
   // read ESP voltage
@@ -154,6 +159,77 @@ void loop(void) {
 } 
 
 /**
+ * readFromDHT()
+ * Read from DHT sensor tem & humidity
+ */
+bool readFromDHT() {
+  float hum, temp;
+  uint32_t delayMS;
+  sensors_event_t event;  
+
+  // initialize temperature sensor
+  dht.begin();           
+  delay(1000);  // slow sensor, wait until it wakes up...
+
+  sensor_t sensor;
+  dht.temperature().getSensor(&sensor);
+
+  if (DEBUG) {
+    toSerial("Sensor:       " + (String)sensor.name); toSerial(" ");
+    toSerial("Driver Ver:   " + (String)sensor.version); toSerial(" ");
+    toSerial("Unique ID:    " + (String)sensor.sensor_id); toSerial(" ");
+    toSerial("Max Value:    " + (String)sensor.max_value + " *C"); toSerial(" ");
+    toSerial("Min Value:    " + (String)sensor.min_value + " *C"); toSerial(" ");
+    toSerial("Resolution:   " + (String)sensor.resolution + " *C");  toSerial(LF);
+  }
+
+  dht.humidity().getSensor(&sensor);
+
+  // Set delay between sensor readings based on sensor details.
+  delayMS = sensor.min_delay / 1000;
+
+  // delay btw mesures
+  delay(delayMS);
+  // Get temperature event and print its value.  
+  dht.temperature().getEvent(&event);
+  yield();
+  ESP.wdtFeed();
+  if (isnan(event.temperature)) {
+    toSerial("Failed to read temperature from DHT sensor!"); toSerial(LF);
+    writeToFS("readFromDHT:: Failed to read temperature from DHT sensor!");
+  }
+  else {
+    temp = event.temperature;
+  }
+  delay(delayMS);
+  // Get humidity event and print its value.
+  dht.humidity().getEvent(&event);
+  yield();
+  ESP.wdtFeed();
+  if (isnan(event.relative_humidity)) {
+    toSerial("Failed to read humidity from DHT sensor!"); toSerial(LF);
+    writeToFS("readFromDHT:: Failed to read humidity from DHT sensor!");
+  }
+  else {
+    hum = event.relative_humidity;
+  }
+  
+  yield();
+  toSerial("Temperature read: " + (String)(temp) + "; "); 
+  toSerial("Humidity read: " + (String)(hum)); toSerial(LF);
+
+  // Check if any reads failed and exit early (to try again).
+  if (isnan(hum) || isnan(temp)) {
+    return (false);
+  } else {
+    humidity = hum;
+    temp_f = temp;
+  }  
+  delay(delayMS); // really usefull?
+
+  return (true);
+}
+/**
  * readVoltage()
  */
 bool readVoltage() {
@@ -162,8 +238,8 @@ bool readVoltage() {
     voltage = ESP.getVcc() / 1024.00f;
     yield();
     if (isnan(voltage)) {
-      toSerial("Failed to read voltage from DHT sensor!"); toSerial(LF);
-      writeToFS("readVoltage:: Failed to read voltage from DHT sensor!");
+      toSerial("Failed to read voltage!"); toSerial(LF);
+      writeToFS("readVoltage:: Failed to read voltage!");
       yield();
       return (false);
     } else {
@@ -295,6 +371,7 @@ void dumpFS() {
       yield();
       ESP.wdtFeed();
     }
+    toSerial("================= "); toSerial(LF);
     f.close();
     yield();
   } else {
@@ -319,13 +396,24 @@ void toSerial(String str) {
  */
 void writeToFS(String str) {
   File f;
+  unsigned long time = 0;
+  String timestr = "";
+  
   f = SPIFFS.open(FILE_LOG, "a");
   if (!f) {
     toSerial("File open failed!"); toSerial(LF);
     yield();
     return;
   }
-  f.println(str);
+  time = getGMTTime();
+  if (time != 0) {
+    timestr = " [" + (String)(epoch_to_string(time).c_str()) + "]";
+  } else {
+    // let's try again...
+    time = getGMTTime();
+    if (time != 0) timestr = " [" + (String)(epoch_to_string(time).c_str()) + "]";
+  }
+  f.println(str + timestr + "[wakeUp#:" + (String)getWakeUpCount() + "]");
   f.close();
   yield();
   ESP.wdtFeed();
@@ -342,7 +430,7 @@ void connectWiFi() {
   delay(100);
   toSerial("done."); toSerial(LF);
   WiFi.mode(WIFI_STA);
-  toSerial("WiFi mode set to WIFI_STA"); toSerial(LF);
+  //toSerial("WiFi mode set to WIFI_STA"); toSerial(LF);
   // connect to the WiFi network
   WiFi.begin(ssid, password);
   yield();
@@ -355,7 +443,7 @@ void connectWiFi() {
     toSerial(".");
   }
   if (WiFi.status() == WL_CONNECTED) {
-    toSerial("connected to " + (String)ssid); toSerial(LF);
+    toSerial("connected to " + (String)ssid + ", "); 
     toSerial("IP address: " + WiFi.localIP().toString()); toSerial(LF);
   } else {
     toSerial("failed to connected to " + (String)ssid + "!"); toSerial(LF);
@@ -378,7 +466,7 @@ bool connect(const char* hostName, const int port) {
  * Close the connection with the HTTP server 
  */
 void disconnect() {
-  toSerial("Disconnect from HTTP server"); toSerial(LF);
+  //toSerial("Disconnect from HTTP server"); toSerial(LF);
   client.stop();
   yield();
 }
@@ -399,38 +487,41 @@ bool sendRequest(const char* host, String resource) {
   yield();   
   return true;  
 }
-
 /**
- * readFromDHT()
- * Read from DHT sensor tem & humidity
+ * connect to NTP and return GMT time (epoch)
+ * @return 0 if error
  */
-bool readFromDHT() {
-  float hum, temp;
-
-  // initialize temperature sensor
-  dht.begin();           
-  delay(5000);  // slow sensor, wait until it wakes up...
-    
-  // Reading temperature or humidity takes about 250 milliseconds!
-  // Sensor readings may also be up to 2 seconds 'old' (it's a very slow sensor)
-  hum = dht.readHumidity();          // Read humidity (percent)
+unsigned long getGMTTime() {
+  unsigned long time; // GMT Time
+  
+  time = getNTPTimestamp();
   yield();
-  ESP.wdtFeed();
-  temp = dht.readTemperature();     // Read temperature C
-  yield();
-  toSerial("Temperature read: " + (String)(temp) + "; "); 
-  toSerial("Humidity read: " + (String)(hum)); toSerial(LF);
+  toSerial("Current Time GMT from NTP server: " );
+  toSerial(epoch_to_string(time).c_str()); toSerial(LF);
 
-  // Check if any reads failed and exit early (to try again).
-  if (isnan(hum) || isnan(temp)) {
-    toSerial("Failed to read from DHT sensor!"); toSerial(LF);
-    writeToFS("readFromDHT:: Failed to read from DHT sensor!");
-    return (false);
-  } else {
-    humidity = hum;
-    temp_f = temp;
-  }  
-  delay(5000); // really usefull?
-
-  return (true);
+  return (time);
 }
+// TODO: en class C++!!
+unsigned long getWakeUpCount() {
+  File file = SPIFFS.open(FILE_WAKECOUNT, "r");
+  if (file && file.available()) {
+    yield();
+    String line = file.readStringUntil('\n');
+    if (line) return (line.toInt());
+  }
+  return (0);
+}
+bool incWakeUpCount() {
+  unsigned long count = 0;
+
+  count = getWakeUpCount() + 1;
+  File file = SPIFFS.open(FILE_WAKECOUNT, "w");
+  if (file) {
+    yield();
+    file.println(count);
+    file.close();
+    return (true);
+  }
+  return (false);
+}
+
