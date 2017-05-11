@@ -1,7 +1,3 @@
-/* 
- *  ESP8266 with a DHT sensor that sends its data to thingspeak
-*/
-
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
@@ -22,10 +18,14 @@ extern "C" {
 #define DHTPIN  2 // PIN 2 == D4
 #define SDAPIN 4 // PIN 4 == D1
 #define SCLPIN 5 // PIN 5 == D2
+#define ANALOGPIN A0
+#define ENABLE_ADC_VCC  // if uncommented, allow voltage reading
 #define FREQUENCY 160 // CPU freq; valid 80, 160
-#define DEBUG true
+#define DEBUG false
 
+#ifdef ENABLE_ADC_VCC
 ADC_MODE(ADC_VCC);
+#endif
 
 // pour le capteur de temperature DHT22
 DHT_Unified dht(DHTPIN, DHTTYPE);
@@ -40,6 +40,7 @@ Adafruit_BMP085_Unified bmp = Adafruit_BMP085_Unified(10085);
 /**
  * Declaration
  */
+void initAll();
 void initSerial();
 void initFS();
 void writeToFS(String str);
@@ -52,8 +53,8 @@ bool connect(const char* hostName, const int port = 80);
 void disconnect();
 bool sendRequest(const char* host, String resource);
 bool readFromDHT();
-bool readFromBMP();
-bool readVoltage();
+bool readFromBMP (float *pPressure, float *pBmpTemp);
+bool readVoltage(float *pVoltage);
 unsigned long getGMTTime();
 unsigned long getWakeUpCount(); // TODO: faire une class C++
 bool incWakeUpCount();
@@ -71,87 +72,127 @@ const char* hostDomoticz = "192.168.0.17";
 /**
  * domo stuff
  */
-struct domostuff {
-   int sleepTime = 300; // sleep time in seconds
-   String channelID = "215867"; // THTest
-   String writeAPIKey = "8KD3JE2KT4XD8XHN";  // Write API Key THTest
-   int idxDomoticz = 49; // TH Test T+H
+enum WhichSensor { TEST = 0, SALON = 1, UKN = 2  };
+struct Domostuff {
+  WhichSensor which;
+  int sleepTime; // sleep time in seconds
+  String channelID; // THTest
+  String writeAPIKey;  // Write API Key THTest
+  int idxDomoticz1; // Materiel: ThingSpeak THTest, type: Temp + Humidity, sous-type: THGN122/123, THGN132, THGR122/228/238/268
+  int idxDomoticz2; // Materiel: ThingSpeak THTest, type: General, sous-type: Barometer
+  bool hasBMP180;
 };
-domostuff param, paramAtmo;
-float humidity, temp_f, gVoltage = 0;   // Values read from DHT22 sensor
+Domostuff paramTest = { WhichSensor::TEST, 300, "215867", "8KD3JE2KT4XD8XHN", 49, 62, true };
+Domostuff paramSalon = { WhichSensor::SALON, (DEBUG? 300: 600), "211804", "5W8JKMZZBRBAT4DX", 48, 63, true };
+Domostuff param;
+float gVoltage = 0;
+float humidity, temp_f;   // Values read from DHT22 sensor
 float gPressure = -1, gBmpTemp;  // Values 
 const float CURRENT_ALTITUDE = 239.93; // Goncelin appart
 
 /**
  * General stuff
  */
-const unsigned long BAUD_RATE = 57600; // serial connection speed
+const unsigned long BAUD_RATE = 115200; // serial connection speed
 const String LF = (String)'\x0a';
 const char *FILE_LOG = "/log.log";
 const char *FILE_WAKECOUNT = "/wakecount.log";
+bool gisvoltage = false, gisbmp180 = false, gisdht22 = false;
 
 /**
  * setup()
  */
-void setup(void) {  
-  // open the Arduino IDE Serial Monitor window to see what the code is doing
-  initSerial();
-  // init the filesystem...
-  initFS();
+void setup(void) {
+  initAll();
 
-  // CPU Freq
-  system_update_cpu_freq(FREQUENCY); // test overclocking... ca marche bien donc let's go!
-  toSerial("CPU Freq set to: " + (String)FREQUENCY); toSerial(LF);
+  /*if (false) {
+    // test airquality
+    unsigned long duration;
+    unsigned long starttime;
+    unsigned long endtime;
+    unsigned long sampletime_ms = 30000;
+    unsigned long lowpulseoccupancy = 0;
+    float ratio = 0;
+    float concentration = 0;
+    int init_voltage, first_vol, last_vol;
+    unsigned char i=0;
+    long vol_standard;
+    boolean error;
+    int _pin = 15;
 
-  // wake up count, ie, execution start count...
-  incWakeUpCount();
-  
-  // Connect to WiFi network
-  connectWiFi();
+    toSerial("WIP AirQuality..."); toSerial(LF);
+    
+    pinMode(_pin, INPUT);
+    //delay(20000); //200000
+    //init_voltage = analogRead(_pin);
+    //toSerial("The init voltage is ..."); toSerial((String)init_voltage); toSerial(LF);
+    while (init_voltage) {
+        if (init_voltage < 798 && init_voltage > 10) { // the init voltage is ok
+            first_vol=analogRead(_pin);//initialize first value
+            last_vol=first_vol;
+            vol_standard=last_vol;
+            Serial.println("Sensor ready.");
+            error=false;;
+            break;
+        } else if (init_voltage > 798 || init_voltage <= 10) {
+            i++;
+            delay(60000);//60000
+            Serial.println("waitting sensor init..");
+            init_voltage=analogRead(_pin);
+            if (i==5) {
+                i=0;
+                error=true;
+                Serial.println("Sensor Error!");
+            }
+        } else
+          break;
+    }
+    
+    starttime = millis();
+    
+    duration = pulseIn(_pin, LOW);
+    lowpulseoccupancy += duration;
+    endtime = millis();
+
+    ratio = (lowpulseoccupancy-endtime+starttime + sampletime_ms)/(sampletime_ms*10.0);  // Integer percentage 0=>100
+    toSerial("ratio: " + (String)ratio); toSerial(LF);
+  }*/
+
+  // read ESP voltage
+  gisvoltage = readVoltage(&gVoltage);
+  // read DHT22 sensor
+  gisdht22 = readFromDHT();
 
   // Selon capteur...
   if (WiFi.localIP().toString() == "192.168.0.21") {
     // THTest
-    // on utilise les param par defaut...
-
-    // lecture de la sonde de pression atmo...
-    paramAtmo.idxDomoticz = 62;
-    readFromBMP();
-    
+    param = paramTest;
   } else if (WiFi.localIP().toString() == "192.168.0.20") {
     // THSalon
-    param.channelID = "211804";
-    param.writeAPIKey = "5W8JKMZZBRBAT4DX";
-    param.idxDomoticz = 48;
-    if (!DEBUG) param.sleepTime = 600; // 10 min.
+    param = paramSalon;
+  }
+
+  // read BPM180 sensor if present (supposed to be)
+  if (param.hasBMP180) {
+    gisbmp180 = readFromBMP(&gPressure, &gBmpTemp);
   }
 
   // dump log file (DEBUG)
   if (DEBUG) dumpFS();
 
   // clear filesystem (to delete log file)
-  if (DEBUG) {
-    //toSerial("deleting log file...");
-    //SPIFFS.remove(FILE_LOG);
-    //toSerial("ok."); toSerial(LF);
+  if (false /*DEBUG*/) {
+    toSerial("deleting log file...");
+    SPIFFS.remove(FILE_LOG);
+    toSerial("ok."); toSerial(LF);
+    toSerial("deleting wakeup file...");
+    SPIFFS.remove(FILE_WAKECOUNT);
+    toSerial("ok."); toSerial(LF);
   }
 
-  if (DEBUG) {
-    // read current time
-    getGMTTime();
-    // read wake up count
-    toSerial("Wake up count: " + (String)getWakeUpCount()); toSerial(LF);
-  }
-  
-  // read ESP voltage
-  readVoltage();
-
-  // read temperature & humidity
-  if (readFromDHT()) {
-    sendThingspeak();
-    sendDomoticz();    
-    delay(5000);
-  }
+  sendThingspeak();
+  sendDomoticz();    
+  delay(5000);
   
   // dodo...
   if (DEBUG) {
@@ -173,22 +214,48 @@ void setup(void) {
 void loop(void) {
   yield();
 } 
+/**
+ * initAll
+ */
+void initAll() {
+  // open the Arduino IDE Serial Monitor window to see what the code is doing
+  initSerial();
+  // init the filesystem...
+  initFS();
+  // CPU Freq
+  system_update_cpu_freq(FREQUENCY); // test overclocking... ca marche bien donc let's go!
+  toSerial("CPU Freq set to: " + (String)FREQUENCY); toSerial(LF);
 
+  // Connect to WiFi network
+  connectWiFi();  
+
+  // wake up count, ie, execution start count...
+  incWakeUpCount();
+  
+  if (DEBUG) {
+    getGMTTime(); // read current time
+    toSerial("Wake up count: " + (String)getWakeUpCount()); toSerial(LF);
+  }
+}
 /**
  * readFromBMP
  * Read from BMP180 pressure & temperature
+ * @param out float *pPressure -1 if error
+ * @param out float *pBmpTemp
+ * @return false if any error occurs
  */
-bool readFromBMP () {
+bool readFromBMP (float *pPressure, float *pBmpTemp) {
   float temperature;
   bool ret = true;
   
   toSerial("Checking BMP 180..."); toSerial(LF);
   Wire.begin(SDAPIN, SCLPIN);
-  gPressure = -1;
+  *pPressure = -1;
   
   if (!bmp.begin()) {
     /* There was a problem detecting the BMP085 ... check your connections */
     toSerial("Error: no BMP180 detected ... Check wiring or I2C ADDR!"); toSerial(LF);
+    writeToFS("readFromBMP:: no BMP180 detected!");
     yield();
     ESP.wdtFeed();
     ret = false;
@@ -212,7 +279,7 @@ bool readFromBMP () {
     }
         
     if (event.pressure) {
-      gPressure = event.pressure;
+      *pPressure = event.pressure;
       yield();
       ESP.wdtFeed();
       toSerial("Pressure (local): " + (String)event.pressure + " hPa"); toSerial(LF);
@@ -221,7 +288,7 @@ bool readFromBMP () {
       yield();
       ESP.wdtFeed();
       bmp.getTemperature(&temperature);
-      gBmpTemp = temperature;
+      *pBmpTemp = temperature;
       toSerial("Temperature: " + (String)temperature + " C"); toSerial(LF);
     } else {
       ret = false;
@@ -303,26 +370,35 @@ bool readFromDHT() {
 }
 /**
  * readVoltage()
+ * @param out float *pVoltage NULL if VCC mode unavailable or error reading vcc
+ * @return false if error
  */
-bool readVoltage() {
+bool readVoltage(float *pVoltage) {
     float voltage = 0.00f;
-    
-    voltage = ESP.getVcc() / 1024.00f;
+
+    *pVoltage = NULL;
+    voltage = ESP.getVcc();
     yield();
     if (isnan(voltage)) {
       toSerial("Failed to read voltage!"); toSerial(LF);
       writeToFS("readVoltage:: Failed to read voltage!");
       yield();
       return (false);
+    } else if (voltage == 65535) { // TOUT mode / anlog input and no voltage available
+      return (false);
     } else {
-      gVoltage = (float)voltage;
+      voltage = (float)(voltage / 1024.00f);
       toSerial("Voltage: " + (String)voltage); toSerial(LF);
+      *pVoltage = voltage;
     }
     yield();
     ESP.wdtFeed();
     return (true);
 }
 
+/**
+ * sendThingspeak(): send to Thingspeak
+ */
 void sendThingspeak() {
   if (!connect(hostTS) ) { // default HTTP port is 80, fine for TS
     toSerial("connection to Thingspeak failed!"); toSerial(LF);
@@ -331,15 +407,25 @@ void sendThingspeak() {
     return;
   }
 
-  // We now create a URI for the request
-  String urlT = "/update?key=" + param.writeAPIKey 
-      + "&field1=" + String((float)temp_f) + "&field2=" + String((float)humidity) 
-      + "&field3=" + (isnan(gVoltage)? "": String((float)gVoltage));
+  // We now create a URI for the request - DHT22 data
+  String urlT = "/update?key=" + param.writeAPIKey;
 
-  // BMP180 sensor present and ok?
-  if (gPressure != -1) {
-    urlT += "&field4=" + String((float)gPressure) 
-        + "&field5=" + String((float)gBmpTemp);
+  // specifics per sensor
+  switch (param.which) {
+
+    case WhichSensor::SALON:
+    case WhichSensor::TEST:
+
+      if (gisdht22) {
+          urlT += "&field1=" + String((float)temp_f) + "&field2=" + String((float)humidity) 
+          + "&field3=" + (!gisvoltage? "": String((float)gVoltage));
+      }
+      // BMP180 sensor present and ok?
+      if (gisbmp180 && gPressure != -1) {
+        urlT += "&field4=" + String((float)gPressure) + "&field5=" + String((float)gBmpTemp);
+      }
+      
+      break;
   }
 
   if (!sendRequest(hostTS, urlT)) {
@@ -356,65 +442,75 @@ void sendThingspeak() {
  * sendDomoticz(): send to Domoticz local server
  */
 void sendDomoticz() {
-  const int idx = param.idxDomoticz;
+  const int idx = param.idxDomoticz1;
   char *humidity_status = "0";
   
-  if (!connect(hostDomoticz, httpDomoticzPort)) {
-    toSerial("connection to local Domoticz failed!"); toSerial(LF);
-    writeToFS("sendDomoticz:: connection to local Domoticz failed!");
+  // specifics per sensor
+  switch (param.which) {
+    case WhichSensor::TEST:
+      break;
+    case WhichSensor::SALON:
+      break;
+  }
+
+  if (gisdht22) {
+    
+    if (isnan(humidity) || isnan(temp_f)) {
+      toSerial("failed to send to Domoticz: humidity or temperature not available"); toSerial(LF);
+      yield();
+      return;
+    }
+  
+    // determiner le statut de l'humidite...
+    if (humidity >= 46 && humidity <= 70) {
+      humidity_status = "1"; // comfortable
+    } else if (humidity < 46) {
+      humidity_status = "2"; // dry
+    } else if (humidity > 70) {
+      humidity_status = "3"; // wet
+    } else {
+      humidity_status = "0";
+    }
     yield();
-    return;
-  }
+  
+    // create a URI for the request
+    // /json.htm?type=command&param=udevice&idx=IDX&nvalue=0&svalue=TEMP;HUM;HUM_STAT
+    String urlT = "/json.htm?type=command&param=udevice&idx=" + String((int)idx) + "&nvalue=0"
+        + "&svalue=" + String((float)temp_f) + ";" + String((float)humidity) + ";" + humidity_status;
+    if (!connect(hostDomoticz, httpDomoticzPort)) {
+      toSerial("connection to local Domoticz failed!"); toSerial(LF);
+      writeToFS("sendDomoticz:: connection to local Domoticz failed!");
+      yield();
+      return;
+    }  
+    if (!sendRequest(hostDomoticz, urlT)) {
+      toSerial("failed to send to Domoticz!"); toSerial(LF);
+      writeToFS("sendDomoticz:: failed to send to Domoticz!");
+      yield();
+    }
+    yield(); ESP.wdtFeed();
 
-  if (isnan(humidity) || isnan(temp_f)) {
-    toSerial("failed to send to Domoticz: humidity or temperature not available"); toSerial(LF);
-    yield();
-    return;
-  }
-
-  // determiner le statut de l'humidite...
-  if (humidity >= 46 && humidity <= 70) {
-    humidity_status = "1"; // comfortable
-  } else if (humidity < 46) {
-    humidity_status = "2"; // dry
-  } else if (humidity > 70) {
-    humidity_status = "3"; // wet
-  } else {
-    humidity_status = "0";
-  }
-  yield();
-
-  // create a URI for the request
-  // /json.htm?type=command&param=udevice&idx=IDX&nvalue=0&svalue=TEMP;HUM;HUM_STAT
-  String urlT = "/json.htm?type=command&param=udevice&idx=" + String((int)idx) + "&nvalue=0"
-      + "&svalue=" + String((float)temp_f) + ";" + String((float)humidity) + ";" + humidity_status;
-  if (gPressure != -1) {
-    urlT += ";" + (String)gPressure + ";0";
+    disconnect();    
   }
   
-  if (!sendRequest(hostDomoticz, urlT)) {
-    toSerial("failed to send to Domoticz!"); toSerial(LF);
-    writeToFS("sendDomoticz:: failed to send to Domoticz!");
-    yield();
-  }
-  yield();
-  ESP.wdtFeed();
-
   // send barometer
-  if (gPressure != -1) {
-    String urlT = "/json.htm?type=command&param=udevice&idx=" + String((int)paramAtmo.idxDomoticz) + "&nvalue=0"
+  if (gisbmp180 && gPressure != -1 && param.idxDomoticz2 > 0) {
+    String urlT = "/json.htm?type=command&param=udevice&idx=" + String((int)param.idxDomoticz2) + "&nvalue=0"
         + "&svalue=" + (String)(gPressure) + ";0";
-    
+    if (!connect(hostDomoticz, httpDomoticzPort)) {
+      toSerial("connection to local Domoticz failed!"); toSerial(LF);
+      writeToFS("sendDomoticz:: connection to local Domoticz failed!");
+      yield();
+      return;
+    }      
     if (!sendRequest(hostDomoticz, urlT)) {
       toSerial("failed to send baro to Domoticz!"); toSerial(LF);
       writeToFS("sendDomoticz:: failed to send baro to Domoticz!");
       yield();
     }
-    yield();
-    ESP.wdtFeed();
+    yield(); ESP.wdtFeed();
+    disconnect();
   }
-  
-  disconnect();
 }
 
 /**
@@ -509,7 +605,7 @@ void writeToFS(String str) {
     time = getGMTTime();
     if (time != 0) timestr = " [" + (String)(epoch_to_string(time).c_str()) + "]";
   }
-  f.println(str + timestr + "[wakeUp#:" + (String)getWakeUpCount() + "]");
+  f.println(str + timestr + (DEBUG? "[wakeUp#:" + (String)getWakeUpCount() + "]": ""));
   f.close();
   yield();
   ESP.wdtFeed();
@@ -620,4 +716,5 @@ bool incWakeUpCount() {
   }
   return (false);
 }
+
 
