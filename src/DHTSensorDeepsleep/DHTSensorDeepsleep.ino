@@ -3,34 +3,22 @@
 #include <WiFiClient.h>
 #include <aREST.h>
 #include <Wire.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BMP085_U.h>
-#include <DHT.h>
-#include <DHT_U.h>
 #include <ESP.h>
 #include <FS.h>
 extern "C" {
   #include "user_interface.h"
 }
 #include "time_ntp.h"
+#include "SensorManagement.h"
 
-#define DHTTYPE DHT22
-#define DHTPIN  2 // PIN 2 == D4
-#define SDAPIN 4 // PIN 4 == D1
-#define SCLPIN 5 // PIN 5 == D2
-#define ANALOGPIN A0
-#define ENABLE_ADC_VCC  // if uncommented, allow voltage reading
+//#define ENABLE_ADC_VCC  // if uncommented, allow voltage reading
+
 #define FREQUENCY 160 // CPU freq; valid 80, 160
-#define DEBUG false
+#define DEBUG true
 
 #ifdef ENABLE_ADC_VCC
 ADC_MODE(ADC_VCC);
 #endif
-
-// pour le capteur de temperature DHT22
-DHT_Unified dht(DHTPIN, DHTTYPE);
-// pour le capteur de pression BMP180
-Adafruit_BMP085_Unified bmp = Adafruit_BMP085_Unified(10085);
 
 //
 // pour éviter les plantages / blocages / ???, essai des pistes données ici:
@@ -52,8 +40,6 @@ void connectWiFi();
 bool connect(const char* hostName, const int port = 80);
 void disconnect();
 bool sendRequest(const char* host, String resource);
-bool readFromDHT();
-bool readFromBMP (float *pPressure, float *pBmpTemp);
 bool readVoltage(float *pVoltage);
 unsigned long getGMTTime();
 unsigned long getWakeUpCount(); // TODO: faire une class C++
@@ -82,7 +68,7 @@ struct Domostuff {
   int idxDomoticz2; // Materiel: ThingSpeak THTest, type: General, sous-type: Barometer
   bool hasBMP180;
 };
-Domostuff paramTest = { WhichSensor::TEST, 300, "215867", "8KD3JE2KT4XD8XHN", 49, 62, true };
+Domostuff paramTest = { WhichSensor::TEST, 300, "215867", "8KD3JE2KT4XD8XHN", 49, 62, false };
 Domostuff paramSalon = { WhichSensor::SALON, (DEBUG? 300: 600), "211804", "5W8JKMZZBRBAT4DX", 48, 63, true };
 Domostuff param;
 float gVoltage = 0;
@@ -103,65 +89,43 @@ bool gisvoltage = false, gisbmp180 = false, gisdht22 = false;
  * setup()
  */
 void setup(void) {
+  SensorManagement sensorMgt = SensorManagement();
+
+  /**
+   * init all the stuff...
+   */
   initAll();
+  sensorMgt.initAll();
 
-  /*if (false) {
-    // test airquality
-    unsigned long duration;
-    unsigned long starttime;
-    unsigned long endtime;
-    unsigned long sampletime_ms = 30000;
-    unsigned long lowpulseoccupancy = 0;
-    float ratio = 0;
-    float concentration = 0;
-    int init_voltage, first_vol, last_vol;
-    unsigned char i=0;
-    long vol_standard;
-    boolean error;
-    int _pin = 15;
-
-    toSerial("WIP AirQuality..."); toSerial(LF);
-    
-    pinMode(_pin, INPUT);
-    //delay(20000); //200000
-    //init_voltage = analogRead(_pin);
-    //toSerial("The init voltage is ..."); toSerial((String)init_voltage); toSerial(LF);
-    while (init_voltage) {
-        if (init_voltage < 798 && init_voltage > 10) { // the init voltage is ok
-            first_vol=analogRead(_pin);//initialize first value
-            last_vol=first_vol;
-            vol_standard=last_vol;
-            Serial.println("Sensor ready.");
-            error=false;;
-            break;
-        } else if (init_voltage > 798 || init_voltage <= 10) {
-            i++;
-            delay(60000);//60000
-            Serial.println("waitting sensor init..");
-            init_voltage=analogRead(_pin);
-            if (i==5) {
-                i=0;
-                error=true;
-                Serial.println("Sensor Error!");
-            }
-        } else
-          break;
-    }
-    
-    starttime = millis();
-    
-    duration = pulseIn(_pin, LOW);
-    lowpulseoccupancy += duration;
-    endtime = millis();
-
-    ratio = (lowpulseoccupancy-endtime+starttime + sampletime_ms)/(sampletime_ms*10.0);  // Integer percentage 0=>100
-    toSerial("ratio: " + (String)ratio); toSerial(LF);
-  }*/
-
+  /**
+   * read from sensors...
+   */
+  // read BPM180 sensor if present (supposed to be)
+  if (sensorMgt.hasBMP180()) {
+    gisbmp180 = sensorMgt.readFromBMP(&gPressure, &gBmpTemp);
+    toSerial("BMP180 detected: " + (String)sensorMgt.getBMP180Info()); toSerial(LF);
+  }
+  toSerial("DHT22 detected: " + (String)sensorMgt.getDHTInfo()); toSerial(LF);
+  // read DHT22 sensor
+  gisdht22 = sensorMgt.readFromDHT(&temp_f, &humidity);
+  
   // read ESP voltage
   gisvoltage = readVoltage(&gVoltage);
-  // read DHT22 sensor
-  gisdht22 = readFromDHT();
+
+  if (sensorMgt.hasMQ135()) {
+    float ppm;
+       
+    toSerial("WIP AirQuality..."); toSerial(LF);
+
+    sensorMgt.readFromMQ135(&ppm);
+    toSerial("ppm=" + (String)ppm); toSerial(LF);
+    //float rzero = gasSensor.getRZero();
+    //float ppm = gasSensor.getPPM();
+    //float ppmC = gasSensor.getCorrectedPPM(temp_f, humidity);
+    //Serial.println("rzero=" + (String)rzero);
+    //Serial.println("ppm=" + (String)ppm);
+    //Serial.println("ppmC=" + (String)ppmC);
+  }
 
   // Selon capteur...
   if (WiFi.localIP().toString() == "192.168.0.21") {
@@ -170,11 +134,6 @@ void setup(void) {
   } else if (WiFi.localIP().toString() == "192.168.0.20") {
     // THSalon
     param = paramSalon;
-  }
-
-  // read BPM180 sensor if present (supposed to be)
-  if (param.hasBMP180) {
-    gisbmp180 = readFromBMP(&gPressure, &gBmpTemp);
   }
 
   // dump log file (DEBUG)
@@ -237,137 +196,7 @@ void initAll() {
     toSerial("Wake up count: " + (String)getWakeUpCount()); toSerial(LF);
   }
 }
-/**
- * readFromBMP
- * Read from BMP180 pressure & temperature
- * @param out float *pPressure -1 if error
- * @param out float *pBmpTemp
- * @return false if any error occurs
- */
-bool readFromBMP (float *pPressure, float *pBmpTemp) {
-  float temperature;
-  bool ret = true;
-  
-  toSerial("Checking BMP 180..."); toSerial(LF);
-  Wire.begin(SDAPIN, SCLPIN);
-  *pPressure = -1;
-  
-  if (!bmp.begin()) {
-    /* There was a problem detecting the BMP085 ... check your connections */
-    toSerial("Error: no BMP180 detected ... Check wiring or I2C ADDR!"); toSerial(LF);
-    writeToFS("readFromBMP:: no BMP180 detected!");
-    yield();
-    ESP.wdtFeed();
-    ret = false;
-  } else {
-    sensors_event_t event;
-    bmp.getEvent(&event);
-    yield();
-    ESP.wdtFeed();
-    
-    if (DEBUG) {
-      sensor_t sensor;
-      bmp.getSensor(&sensor);
-      toSerial("Sensor:       " + (String)sensor.name); toSerial(" ");
-      toSerial("Driver Ver:   " + (String)sensor.version + " ");
-      toSerial("Unique ID:    " + (String)(sensor.sensor_id) + " ");
-      toSerial("Max Value:    " + (String)(sensor.max_value) + " ");
-      toSerial("Min Value:    " + (String)(sensor.min_value) + " ");
-      toSerial("Resolution:   " + (String)(sensor.resolution) + " "); toSerial(LF);
-      yield();
-      ESP.wdtFeed();
-    }
-        
-    if (event.pressure) {
-      *pPressure = event.pressure;
-      yield();
-      ESP.wdtFeed();
-      toSerial("Pressure (local): " + (String)event.pressure + " hPa"); toSerial(LF);
-      toSerial("Pressure (sea level): " + (String)bmp.seaLevelForAltitude(CURRENT_ALTITUDE, event.pressure) + " hPa"); toSerial(LF);
 
-      yield();
-      ESP.wdtFeed();
-      bmp.getTemperature(&temperature);
-      *pBmpTemp = temperature;
-      toSerial("Temperature: " + (String)temperature + " C"); toSerial(LF);
-    } else {
-      ret = false;
-    }
-  }
-  return (ret);
-}
-
-/**
- * readFromDHT()
- * Read from DHT sensor tem & humidity
- */
-bool readFromDHT() {
-  float hum, temp;
-  uint32_t delayMS;
-  sensors_event_t event;  
-
-  // initialize temperature sensor
-  dht.begin();           
-  delay(1000);  // slow sensor, wait until it wakes up...
-
-  sensor_t sensor;
-  dht.temperature().getSensor(&sensor);
-
-  if (DEBUG) {
-    toSerial("Sensor:       " + (String)sensor.name); toSerial(" ");
-    toSerial("Driver Ver:   " + (String)sensor.version); toSerial(" ");
-    toSerial("Unique ID:    " + (String)sensor.sensor_id); toSerial(" ");
-    toSerial("Max Value:    " + (String)sensor.max_value + " *C"); toSerial(" ");
-    toSerial("Min Value:    " + (String)sensor.min_value + " *C"); toSerial(" ");
-    toSerial("Resolution:   " + (String)sensor.resolution + " *C");  toSerial(LF);
-  }
-
-  dht.humidity().getSensor(&sensor);
-
-  // Set delay between sensor readings based on sensor details.
-  delayMS = sensor.min_delay / 1000;
-
-  // delay btw mesures
-  delay(delayMS);
-  // Get temperature event and print its value.  
-  dht.temperature().getEvent(&event);
-  yield();
-  ESP.wdtFeed();
-  if (isnan(event.temperature)) {
-    toSerial("Failed to read temperature from DHT sensor!"); toSerial(LF);
-    writeToFS("readFromDHT:: Failed to read temperature from DHT sensor!");
-  }
-  else {
-    temp = event.temperature;
-  }
-  delay(delayMS);
-  // Get humidity event and print its value.
-  dht.humidity().getEvent(&event);
-  yield();
-  ESP.wdtFeed();
-  if (isnan(event.relative_humidity)) {
-    toSerial("Failed to read humidity from DHT sensor!"); toSerial(LF);
-    writeToFS("readFromDHT:: Failed to read humidity from DHT sensor!");
-  }
-  else {
-    hum = event.relative_humidity;
-  }
-  
-  yield();
-  toSerial("Temperature read: " + (String)(temp) + "; "); 
-  toSerial("Humidity read: " + (String)(hum)); toSerial(LF);
-
-  // Check if any reads failed and exit early (to try again).
-  if (isnan(hum) || isnan(temp)) {
-    return (false);
-  } else {
-    humidity = hum;
-    temp_f = temp;
-  }  
-  delay(delayMS); // really usefull?
-
-  return (true);
-}
 /**
  * readVoltage()
  * @param out float *pVoltage NULL if VCC mode unavailable or error reading vcc
