@@ -210,4 +210,40 @@ bool SensorManagement::readFromMQ135 (float *pPPM) {
   *pPPM = val * 1000; //??
   return (true);
 }
+/**
+ * readFromMQ135
+ * read CO2 PPM, and RZero value
+ */
+bool SensorManagement::readFromMQ135 (float *pPPM, float *pRZero) {
+  float ppm, rz;
+  bool ret = true;
+
+  ret = this->readFromMQ135(&ppm);
+  if (!ret) return (false);
+  
+  rz = gMQ135.getRZero();
+
+  *pPPM = ppm;
+  *pRZero = rz;
+  return (true);  
+}
+/**
+ * readFromMQ135Corrected
+ * @input in temperature humidity
+ * @input out PPM CO2
+ */
+bool SensorManagement::readFromMQ135Corrected (float pTemperature, float pHumidity, float *pPPM) {
+  float val;
+  bool ret = true;
+
+  if (!isMQ135) {
+    ret = initMQ135();
+  }
+  if (!ret) return (false);
+  
+  val = gMQ135.getCorrectedPPM(pTemperature, pHumidity);
+  *pPPM = val * 1000; //??
+  return (true);
+
+}
 

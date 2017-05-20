@@ -58,6 +58,8 @@ const char* hostDomoticz = "192.168.0.17";
 /**
  * domo stuff
  */
+SensorManagement sensorMgt = SensorManagement();
+
 enum WhichSensor { TEST = 0, SALON = 1, UKN = 2  };
 struct Domostuff {
   WhichSensor which;
@@ -112,19 +114,17 @@ void setup(void) {
   // read ESP voltage
   gisvoltage = readVoltage(&gVoltage);
 
-  if (sensorMgt.hasMQ135()) {
-    float ppm;
+  if (DEBUG && sensorMgt.hasMQ135()) {
+    float ppm, rzero;
        
-    toSerial("WIP AirQuality..."); toSerial(LF);
+    toSerial("WIP AirQuality...");
+    getGMTTime();
 
-    sensorMgt.readFromMQ135(&ppm);
-    toSerial("ppm=" + (String)ppm); toSerial(LF);
-    //float rzero = gasSensor.getRZero();
-    //float ppm = gasSensor.getPPM();
-    //float ppmC = gasSensor.getCorrectedPPM(temp_f, humidity);
-    //Serial.println("rzero=" + (String)rzero);
-    //Serial.println("ppm=" + (String)ppm);
-    //Serial.println("ppmC=" + (String)ppmC);
+    sensorMgt.readFromMQ135(&ppm, &rzero);
+    toSerial("ppm=" + (String)ppm + " RZero=" + (String)rzero); toSerial(LF);
+    if (sensorMgt.readFromMQ135Corrected(temp_f, humidity, &ppm)) {
+      toSerial("ppm corrected=" + (String)ppm); toSerial(LF);      
+    }
   }
 
   // Selon capteur...
@@ -172,6 +172,21 @@ void setup(void) {
  */
 void loop(void) {
   yield();
+
+  /*if (DEBUG && sensorMgt.hasMQ135()) {
+    float ppm, rzero;
+       
+    toSerial("WIP AirQuality...");
+    getGMTTime();
+
+    sensorMgt.readFromMQ135(&ppm, &rzero);
+    toSerial("ppm=" + (String)ppm + " RZero=" + (String)rzero); toSerial(LF);
+    if (sensorMgt.readFromMQ135Corrected(temp_f, humidity, &ppm)) {
+      toSerial("ppm corrected=" + (String)ppm); toSerial(LF);      
+    }
+  }
+  delay(1 * 1000 * 60); // toutes les minutes
+  */
 } 
 /**
  * initAll

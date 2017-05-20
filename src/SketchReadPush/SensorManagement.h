@@ -13,8 +13,9 @@
 #include <DHT.h>
 #include <DHT_U.h>
 
-#include "MQ135.h"
-#define ATMOCO2 408.84 // https://www.co2.earth/ May 10, 2017:  408.84 ppm
+#include "MQ135.h" // get from https://github.com/ViliusKraujutis/MQ135
+#define ATMOCO2 409.01 // https://www.co2.earth/ May 15, 2017:  409.01 ppm
+//#define RZERO 788.73 // grosse difference avec les 76.63 de la librairie !!??
 
 #define DHTTYPE DHT22
 #define DHTPIN 2 // PIN 2 == D4
@@ -52,6 +53,8 @@ class SensorManagement {
     bool readFromBMP (float *pPressure, float *pBmpTemp);
     bool readFromDHT (float *pTemperature, float *pHumidity);
     bool readFromMQ135 (float *pPPM);
+    bool readFromMQ135 (float *pPPM, float *pRZero);
+    bool readFromMQ135Corrected (float pTemperature, float pHumidity, float *pPPM);
     /**
      * Which ensor on board?
      */
