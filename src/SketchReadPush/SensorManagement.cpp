@@ -207,7 +207,7 @@ bool SensorManagement::readFromMQ135 (float *pPPM) {
   if (!ret) return (false);
   
   val = gMQ135.getPPM();
-  *pPPM = val * 1000; //??
+  *pPPM = val;
   return (true);
 }
 /**
@@ -242,8 +242,7 @@ bool SensorManagement::readFromMQ135Corrected (float pTemperature, float pHumidi
   if (!ret) return (false);
   
   val = gMQ135.getCorrectedPPM(pTemperature, pHumidity);
-  *pPPM = val * 1000; //??
+  *pPPM = val;
   return (true);
 
 }
-

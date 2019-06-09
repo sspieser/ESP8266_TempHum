@@ -7,14 +7,16 @@
 
 #include <ESP8266WiFi.h>
 
-#include <Adafruit_Sensor.h>
+//#include <Adafruit_Sensor.h>
 #include <Adafruit_BMP085_U.h>
 
 #include <DHT.h>
 #include <DHT_U.h>
 
 #include "MQ135.h" // get from https://github.com/ViliusKraujutis/MQ135
-#define ATMOCO2 409.01 // https://www.co2.earth/ May 15, 2017:  409.01 ppm
+//#define ATMOCO2 409.01 // https://www.co2.earth/ May 15, 2017:  409.01 ppm
+/// The load resistance on the board - "102" or 1k... ???
+//#define RLOAD 1.0
 //#define RZERO 788.73 // grosse difference avec les 76.63 de la librairie !!??
 
 #define DHTTYPE DHT22
