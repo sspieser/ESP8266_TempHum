@@ -13,14 +13,17 @@ extern "C" {
 
 #include "SensorManagement.h"
 
-//#define ENABLE_ADC_VCC  // if uncommented, allow voltage reading
+// TEMPO_LOOP_READS minutes to wait between sensor reads and thingspeak uploads
+#define TEMPO_LOOP_READS 1
+
+#define ENABLE_ADC_VCC  // if uncommented, allow voltage reading
 
 #define FREQUENCY 160 // CPU freq; valid 80, 160
 #define DEBUG true
-#define DEBUG_LOOP true
+//#define DEBUG_LOOP true
 
 #ifdef ENABLE_ADC_VCC
-ADC_MODE(ADC_VCC);
+  ADC_MODE(ADC_VCC);
 #endif
 
 //
@@ -46,17 +49,17 @@ bool sendRequest(const char* host, String resource);
 bool readVoltage(float *pVoltage);
 void readGMTTime();
 void sendThingspeak();
-void sendDomoticz();
+//void sendDomoticz();
 
 /**
  * WIFI & network stuff
  */
 WiFiClient client;
-const char* ssid     = "Freebox-7D6D6C"; //"freebox_BPBXWW";
-const char* password = "maowmakamil"; //"sebspi480700";
+const char* ssid     = "freebox_BPBXWW";
+const char* password = "sebspi480700";
 const char* hostTS = "api.thingspeak.com";
-const int httpDomoticzPort = 8090;
-const char* hostDomoticz = "192.168.0.17";
+//const int httpDomoticzPort = 8090;
+//const char* hostDomoticz = "192.168.0.17";
 
 /**
  * domo stuff
@@ -66,20 +69,19 @@ SensorManagement sensorMgt;
 enum WhichSensor { TEST = 0, SALON = 1, UKN = 2  };
 struct Domostuff {
   WhichSensor which;
-  int sleepTime; // sleep time in seconds
+  //int sleepTime; // sleep time in seconds
   String channelID; // THTest
   String writeAPIKey;  // Write API Key THTest
-  int idxDomoticz1; // Materiel: ThingSpeak THTest, type: Temp + Humidity, sous-type: THGN122/123, THGN132, THGR122/228/238/268
-  int idxDomoticz2; // Materiel: ThingSpeak THTest, type: General, sous-type: Barometer
-  bool hasBMP180;
+  //int idxDomoticz1; // Materiel: ThingSpeak THTest, type: Temp + Humidity, sous-type: THGN122/123, THGN132, THGR122/228/238/268
+  //int idxDomoticz2; // Materiel: ThingSpeak THTest, type: General, sous-type: Barometer
+  //bool hasBMP180;
 };
-Domostuff paramTest = { WhichSensor::TEST, 300, "215867", "8KD3JE2KT4XD8XHN", 49, 62, false };
-Domostuff paramSalon = { WhichSensor::SALON, (DEBUG? 300: 600), "211804", "5W8JKMZZBRBAT4DX", 48, 63, true };
+Domostuff paramTest = { WhichSensor::TEST, /*300,*/ "215867", "8KD3JE2KT4XD8XHN"/*, 49, 62, false*/ };
+Domostuff paramSalon = { WhichSensor::SALON, /*(DEBUG? 300: 600),*/ "211804", "5W8JKMZZBRBAT4DX"/*, 48, 63, true*/ };
 Domostuff param = paramTest;
 float gVoltage = 0;
 float humidity, temp_f;   // Values read from DHT22 sensor
-float gPressure = -1, gBmpTemp;  // Values 
-const float CURRENT_ALTITUDE = 239.93; // Goncelin appart
+float gPressure = -1, gBmpTemp;  // Values  read from BMP180 sensor
 unsigned long currentTime = 0; // store current time, to be read from NTP servers
 String currentTimeString = "";
 
@@ -109,37 +111,33 @@ void setup(void) {
    */
   // read BPM180 sensor if present
   if (sensorMgt.hasBMP180()) {
-    gisbmp180 = sensorMgt.readFromBMP(&gPressure, &gBmpTemp);
     toSerial("BMP180 detected: " + (String)sensorMgt.getBMP180Info()); toSerial(LF);
   }
-  // read DHT22 sensor if present (supposed to be)
-  toSerial("DHT22 detected: " + (String)sensorMgt.getDHTInfo()); toSerial(LF);
-  // read DHT22 sensor
-  gisdht22 = sensorMgt.readFromDHT(&temp_f, &humidity);
-  toSerial("DHT22 temp: " + (String)temp_f + ", humidity: " + (String)humidity); toSerial(LF);
-  
-  // read ESP voltage
-  gisvoltage = readVoltage(&gVoltage);
+  // read DHT22 sensor if present
+  if (sensorMgt.hasDHT()) {
+    toSerial("DHT22 detected: " + (String)sensorMgt.getDHTInfo()); toSerial(LF);
+  }
 
-  if (sensorMgt.hasMQ135()) {
+  /*if (sensorMgt.hasMQ135()) {
     float ppm, rzero;
        
-    toSerial("MQ135 AirQuality");
+    toSerial("MQ135 AirQuality\n");
 
     sensorMgt.readFromMQ135(&ppm, &rzero);
     toSerial("ppm=" + (String)ppm + " RZero=" + (String)rzero); toSerial(LF);
     if (sensorMgt.readFromMQ135Corrected(temp_f, humidity, &ppm)) {
       toSerial("ppm corrected=" + (String)ppm); toSerial(LF);      
     }
-  }
+  }*/
 
   // Selon capteur...
-  if (WiFi.localIP().toString() == "192.168.0.21") {
+  toSerial("Device IP : " + WiFi.localIP().toString() + "\n");
+  if (WiFi.localIP().toString() == "192.168.1.26") {
     // THTest
-    param = paramTest;
+    param = paramSalon;
   } else if (WiFi.localIP().toString() == "192.168.0.20") {
     // THSalon
-    param = paramSalon;
+    param = paramTest;
   } else {
     // Keep default param, test so far...
   }
@@ -151,11 +149,11 @@ void setup(void) {
   if (DEBUG) {
     toSerial("deleting log file...");
     SPIFFS.remove(FILE_LOG);
-    toSerial("ok."); toSerial(LF);
+    toSerial("ok.\n");
   }
 
-  sendThingspeak();
-  sendDomoticz();    
+  //sendThingspeak();
+  //sendDomoticz();    
   delay(5000);
   
   // not really needed
@@ -163,22 +161,50 @@ void setup(void) {
   //stopWiFiAndSleep();
 
   // closing stuff before sleeping...
-  if (!DEBUG_LOOP) {
+  /*if (!DEBUG_LOOP) {
     closeFS();
-    toSerial("Sleeping for " + (String)param.sleepTime + " sec."); toSerial(LF);
+    toSerial("Sleeping for " + (String)param.sleepTime + " sec.\n");
     closeSerial();
     yield();
     ESP.deepSleep(param.sleepTime * 1000000);
-  }
+  }*/
 }
 
 /**
  * loop()
  */
 void loop(void) {
+  String msg = "";
+
   toSerial("Entering loop" + LF);
 
-  if (DEBUG_LOOP && sensorMgt.hasMQ135()) {
+  /**
+   * read from sensors...
+   */
+  // read BPM180 sensor if present
+  if (sensorMgt.hasBMP180()) {
+    if (gisbmp180 = sensorMgt.readFromBMP(&gPressure, &gBmpTemp)) {
+      msg = "BMP180 detected: "; msg.concat(String(gPressure, 2)); msg.concat(" (hPa) "); msg.concat(String(gBmpTemp, 2)); msg.concat(" (C)\n");
+      toSerial(msg);
+    } else {
+
+    }
+  }
+  // read DHT22 sensor if present (supposed to be)
+  if (sensorMgt.hasDHT()) {
+    if (gisdht22 = sensorMgt.readFromDHT(&temp_f, &humidity)) {
+      msg = "DHT22 temp: "; msg.concat(String(temp_f, 2)); msg.concat(" (C) "); msg.concat(String(humidity, 2)); msg.concat(" (%)\n");
+      toSerial(msg);
+    } else {
+      toSerial("Failed to read DHT sensor !\n");
+    }
+  }
+
+  // read ESP voltage
+  gisvoltage = readVoltage(&gVoltage);
+  msg = "Voltage: "; msg.concat(String(gVoltage, 2)); msg.concat(" (V)\n"); toSerial(msg);
+
+  /*if (DEBUG_LOOP && sensorMgt.hasMQ135()) {
     float ppm, rzero;
        
     toSerial("AirQuality loop..." + LF);
@@ -188,8 +214,11 @@ void loop(void) {
     if (sensorMgt.readFromMQ135Corrected(temp_f, humidity, &ppm)) {
       toSerial("ppm corrected=" + (String)ppm); toSerial(LF);      
     }
-  }
-  delay(1 * 1000 * 60); // toutes les minutes
+  }*/
+
+  sendThingspeak();
+
+  delay(TEMPO_LOOP_READS * 1000 * 60); // toutes les minutes
   
 } 
 /**
@@ -202,7 +231,7 @@ bool initAll() {
   initFS();
   // CPU Freq
   system_update_cpu_freq(FREQUENCY); // test overclocking... ca marche bien donc let's go!
-  toSerial("CPU Freq set to: " + (String)FREQUENCY); toSerial(LF);
+  toSerial("CPU Freq set to: " + (String)FREQUENCY + "\n");
 
   // Connect to WiFi network
   if (!connectWiFi()) {
@@ -223,7 +252,7 @@ bool initAll() {
 bool readVoltage(float *pVoltage) {
     float voltage = 0.00f;
 
-    *pVoltage = NULL;
+    //*pVoltage = NULL;
     voltage = ESP.getVcc();
     yield();
     if (isnan(voltage)) {
@@ -235,7 +264,7 @@ bool readVoltage(float *pVoltage) {
       return (false);
     } else {
       voltage = (float)(voltage / 1024.00f);
-      toSerial("Voltage: " + (String)voltage); toSerial(LF);
+      //toSerial("Voltage: " + String(voltage, 2)); toSerial(LF);
       *pVoltage = voltage;
     }
     yield();
@@ -262,7 +291,6 @@ void sendThingspeak() {
 
     case WhichSensor::SALON:
     case WhichSensor::TEST:
-
       if (gisdht22) {
           urlT += "&field1=" + String((float)temp_f) + "&field2=" + String((float)humidity) 
           + "&field3=" + (!gisvoltage? "": String((float)gVoltage));
@@ -271,13 +299,12 @@ void sendThingspeak() {
       if (gisbmp180 && gPressure != -1) {
         urlT += "&field4=" + String((float)gPressure) + "&field5=" + String((float)gBmpTemp);
       }
-      
       break;
   }
 
   if (!sendRequest(hostTS, urlT)) {
-    toSerial("failed to GET URI!"); toSerial(LF);
-    writeToFS("sendThingspeak:: failed to GET URI!");
+    toSerial("failed to GET URI!\n");
+    writeToFS("sendThingspeak:: failed to GET URI!\n");
     yield();
   }
   yield();
@@ -288,7 +315,7 @@ void sendThingspeak() {
 /**
  * sendDomoticz(): send to Domoticz local server
  */
-void sendDomoticz() {
+/*void sendDomoticz() {
   const int idx = param.idxDomoticz1;
   char *humidity_status = "0";
   
@@ -358,7 +385,7 @@ void sendDomoticz() {
     yield(); ESP.wdtFeed();
     disconnect();
   }
-}
+}*/
 
 /**
  * stopWiFiAndSleep
@@ -414,7 +441,7 @@ void dumpFS() {
     f.close();
     yield();
   } else {
-    toSerial("unable to open/ file not found: " + (String)FILE_LOG + "!"); toSerial(LF);
+    toSerial("unable to open/ file not found: " + (String)FILE_LOG + "!\n");
     yield();
   }
 }
@@ -440,7 +467,7 @@ void writeToFS(String str) {
   
   f = SPIFFS.open(FILE_LOG, "a");
   if (!f) {
-    toSerial("File open failed!"); toSerial(LF);
+    toSerial("File open failed!\n");
     yield();
     return;
   }
@@ -478,8 +505,8 @@ bool connectWiFi() {
     toSerial("IP address: " + WiFi.localIP().toString()); toSerial(LF);
     return (true);
   } else {
-    toSerial("failed to connected to " + (String)ssid + "!"); toSerial(LF);
-    writeToFS("connectWiFi:: failed to connected to " + (String)ssid + "!");
+    toSerial("failed to connected to " + (String)ssid + "!\n");
+    writeToFS("connectWiFi:: failed to connected to " + (String)ssid + "!\n");
     return (false);
   }
   yield();
@@ -492,14 +519,14 @@ bool connect(const char* hostName, const int port) {
   bool ok = client.connect(hostName, port);
   yield();
   ESP.wdtFeed();
-  toSerial(ok ? "OK" : "Failed!"); toSerial(LF);
+  toSerial(ok ? "OK\n" : "Failed!\n");
   return ok;
 }
 /** 
  * Close the connection with the HTTP server 
  */
 void disconnect() {
-  toSerial("Disconnect from HTTP server"); toSerial(LF);
+  toSerial("Disconnect from HTTP server\n");
   client.stop();
   yield();
 }
@@ -507,7 +534,7 @@ void disconnect() {
  * Send the HTTP GET request to the server 
  */
 bool sendRequest(const char* host, String resource) {      
-  toSerial("GET " + resource); toSerial(LF);
+  toSerial("GET " + String(host) + resource + "\n");
 
   client.print("GET ");     
   client.print(resource);     

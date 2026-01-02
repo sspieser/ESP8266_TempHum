@@ -3,15 +3,14 @@
 SensorManagement::SensorManagement() {
 }
 SensorManagement::~SensorManagement() {
-  gBMP180 = NULL;
+  //gBMP180 = null;
 }
 /**
  * initAll() init all sensors (try to...)
  */
 bool SensorManagement::initAll() {
   bool ret1, ret2, ret3 = true;
-  
-  // pour le capteur de pression BMP180
+
   ret1 = initBMP();
   ret2 = initDHT();
   ret3 = initMQ135();
@@ -21,7 +20,7 @@ bool SensorManagement::initAll() {
 /**
  * initMQ135
  */
- bool SensorManagement::initMQ135() {
+bool SensorManagement::initMQ135() {
   int val = analogRead(ANALOGPIN);
   if (val >= 0 && val <= 1023) {
     isMQ135 = true;
@@ -30,47 +29,51 @@ bool SensorManagement::initAll() {
   }
 
   return (isMQ135);
- }
+}
 /**
  * initBMP init BMP180 sensor
  * @return false if any error occurs
  */
 bool SensorManagement::initBMP() {
   sensor_t sensor;
-  
+
   // Baro sensor BMP180
   gBMP180 = Adafruit_BMP085_Unified(10086);
-  Wire.begin(SDAPIN, SCLPIN);
-  if (!gBMP180.begin()) { // There was a problem detecting the BMP085 ... check your connections    
-    yield(); ESP.wdtFeed();
+  //Wire.begin(SDAPIN, SCLPIN);
+  if (!gBMP180.begin()) {  // There was a problem detecting the BMP085 ... check your connections
+    yield();
+    ESP.wdtFeed();
     isBMP = false;
   } else {
     isBMP = true;
 
-    yield(); ESP.wdtFeed();
+    yield();
+    ESP.wdtFeed();
     gBMP180.getSensor(&sensor);
     bmp180Info = "Sensor: " + (String)sensor.name + " "
-        + "Driver Ver: " + (String)sensor.version + " "
-        + "Unique ID: " + (String)(sensor.sensor_id) + " "
-        + "Max Value: " + (String)(sensor.max_value) + " "
-        + "Min Value: " + (String)(sensor.min_value) + " "
-        + "Resolution: " + (String)(sensor.resolution) + " ";    
+                 + "Driver Ver: " + (String)sensor.version + " "
+                 + "Unique ID: " + (String)(sensor.sensor_id) + " "
+                 + "Max Value: " + (String)(sensor.max_value) + " "
+                 + "Min Value: " + (String)(sensor.min_value) + " "
+                 + "Resolution: " + (String)(sensor.resolution) + " ";
   }
-  yield(); ESP.wdtFeed();
+  yield();
+  ESP.wdtFeed();
   return (isBMP);
 }
 /**
  * initDHT init DHT22 sensor
  * @return false if any error occurs
  */
-bool SensorManagement::initDHT() {  
+bool SensorManagement::initDHT() {
   sensor_t sensor;
-  
+
   // DHT22 temp & hum sensor
-  gDHT.begin();           
-  delay(1000);
+  gDHT.begin();
+  delay(gDHTdelayMS);
   isDHT = true;
-  
+
+  /*
   gDHT.temperature().getSensor(&sensor); 
   dhtInfo = "Sensor: " + (String)sensor.name + " "
       + "Driver Ver: " + (String)sensor.version + " "
@@ -79,20 +82,24 @@ bool SensorManagement::initDHT() {
       + "Min Value: " + (String)sensor.min_value + " *C" + " "
       + "Resolution: " + (String)sensor.resolution + " *C";
   
-  gDHT.humidity().getSensor(&sensor);    
-  // Set delay between sensor readings based on sensor details.
-  gDHTdelayMS = sensor.min_delay / 1000;    
-  // delay btw mesures
   delay(gDHTdelayMS);
+  gDHT.humidity().getSensor(&sensor);
+  */
+  // Set delay between sensor readings based on sensor details.
+  //gDHTdelayMS = sensor.min_delay / 1000;    
+  // delay btw mesures
 
+/*
   dhtInfo += " Sensor: " + (String)sensor.name + " "
       + "Driver Ver: " + (String)sensor.version + " "
       + "Unique ID: " + (String)sensor.sensor_id + " "
       + "Max Value: " + (String)sensor.max_value + " %" + " "
       + "Min Value: " + (String)sensor.min_value + " %" + " "
       + "Resolution: " + (String)sensor.resolution + " %";
+*/
 
-  yield(); ESP.wdtFeed();
+  yield();
+  ESP.wdtFeed();
   return (isDHT);
 }
 /**
@@ -123,50 +130,55 @@ String SensorManagement::getDHTInfo() {
 /**
  * readFromBMP
  * Read from BMP180 pressure & temperature
- * @param out float *pPressure -1 if error
+ * @param out float *pPressure at sea level, -1 if error
  * @param out float *pBmpTemp
  * @return false if any error occurs
  */
-bool SensorManagement::readFromBMP (float *pPressure, float *pBmpTemp) {
+bool SensorManagement::readFromBMP(float *pPressure, float *pBmpTemp) {
   sensors_event_t event;
   float temperature;
   bool ret = true;
-  
-  if (isBMP) {    
+
+  if (isBMP) {
     gBMP180.getEvent(&event);
-    yield(); ESP.wdtFeed();
-        
+    yield();
+    ESP.wdtFeed();
+
     if (event.pressure) {
-      *pPressure = event.pressure;
-      yield(); ESP.wdtFeed();
-      /*toSerial("Pressure (local): " + (String)event.pressure + " hPa"); toSerial(LF);
-      toSerial("Pressure (sea level): " + (String)gBMP180.seaLevelForAltitude(CURRENT_ALTITUDE, event.pressure) + " hPa"); toSerial(LF);*/
-      
       gBMP180.getTemperature(&temperature);
       *pBmpTemp = temperature;
-      //toSerial("Temperature: " + (String)temperature + " C"); toSerial(LF);
+
+      *pPressure = gBMP180.seaLevelForAltitude(CURRENT_ALTITUDE, event.pressure, temperature);
+      yield();
+      ESP.wdtFeed();
     } else {
       ret = false;
     }
   }
-  yield(); ESP.wdtFeed();
+  yield();
+  ESP.wdtFeed();
   return (ret);
 }
 /**
  * readFromDHT
  */
-bool SensorManagement::readFromDHT (float *pTemperature, float *pHumidity) {
+bool SensorManagement::readFromDHT(float *pTemperature, float *pHumidity) {
   sensors_event_t event;
   float hum, temp;
-  
-  if (!hasDHT()) initDHT();
-  
-  delay(gDHTdelayMS); 
+
+  delay(gDHTdelayMS);
+  hum = gDHT.readHumidity();  // Read humidity (percent)
+  temp = gDHT.readTemperature();  // Read temperature as Fahrenheit
+  // Check if any reads failed and exit early (to try again).
+  if (isnan(hum) || isnan(temp)) {
+    Serial.println("Failed to read from DHT sensor! " + String(temp) + ":" + String(hum));
+    return (false);
+  }
+
+  /*delay(gDHTdelayMS); 
   gDHT.temperature().getEvent(&event);
   yield(); ESP.wdtFeed();
   if (isnan(event.temperature)) {
-    //toSerial("Failed to read temperature from DHT sensor!"); toSerial(LF);
-    //writeToFS("readFromDHT:: Failed to read temperature from DHT sensor!");
     return (false);
   }
   else {
@@ -176,28 +188,26 @@ bool SensorManagement::readFromDHT (float *pTemperature, float *pHumidity) {
   gDHT.humidity().getEvent(&event);
   yield(); ESP.wdtFeed();
   if (isnan(event.relative_humidity)) {
-    //toSerial("Failed to read humidity from DHT sensor!"); toSerial(LF);
-    //writeToFS("readFromDHT:: Failed to read humidity from DHT sensor!");
     return (false);
   }
   else {
     hum = event.relative_humidity;
-  }
-  
-  yield(); ESP.wdtFeed();
-  //toSerial("Temperature read: " + (String)(temp) + "; "); 
-  //toSerial("Humidity read: " + (String)(hum)); toSerial(LF);
-  delay(gDHTdelayMS); // really usefull?
+  }*/
+
+  yield();
+  ESP.wdtFeed();
+  Serial.println("Temperature read: " + (String)(temp) + "; ");
+  Serial.println("Humidity read: " + (String)(hum) + "\n");
 
   *pTemperature = temp;
   *pHumidity = hum;
-  
-  return (true);  
+
+  return (true);
 }
 /**
  * readFromMQ135 (float *pPPM)
  */
-bool SensorManagement::readFromMQ135 (float *pPPM) {
+bool SensorManagement::readFromMQ135(float *pPPM) {
   float val;
   bool ret = true;
 
@@ -205,7 +215,7 @@ bool SensorManagement::readFromMQ135 (float *pPPM) {
     ret = initMQ135();
   }
   if (!ret) return (false);
-  
+
   val = gMQ135.getPPM();
   *pPPM = val;
   return (true);
@@ -214,25 +224,25 @@ bool SensorManagement::readFromMQ135 (float *pPPM) {
  * readFromMQ135
  * read CO2 PPM, and RZero value
  */
-bool SensorManagement::readFromMQ135 (float *pPPM, float *pRZero) {
+bool SensorManagement::readFromMQ135(float *pPPM, float *pRZero) {
   float ppm, rz;
   bool ret = true;
 
   ret = this->readFromMQ135(&ppm);
   if (!ret) return (false);
-  
+
   rz = gMQ135.getRZero();
 
   *pPPM = ppm;
   *pRZero = rz;
-  return (true);  
+  return (true);
 }
 /**
  * readFromMQ135Corrected
  * @input in temperature humidity
  * @input out PPM CO2
  */
-bool SensorManagement::readFromMQ135Corrected (float pTemperature, float pHumidity, float *pPPM) {
+bool SensorManagement::readFromMQ135Corrected(float pTemperature, float pHumidity, float *pPPM) {
   float val;
   bool ret = true;
 
@@ -240,9 +250,8 @@ bool SensorManagement::readFromMQ135Corrected (float pTemperature, float pHumidi
     ret = initMQ135();
   }
   if (!ret) return (false);
-  
+
   val = gMQ135.getCorrectedPPM(pTemperature, pHumidity);
   *pPPM = val;
   return (true);
-
 }
