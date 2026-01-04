@@ -196,8 +196,8 @@ bool SensorManagement::readFromDHT(float *pTemperature, float *pHumidity) {
 
   yield();
   ESP.wdtFeed();
-  Serial.println("Temperature read: " + (String)(temp) + "; ");
-  Serial.println("Humidity read: " + (String)(hum) + "\n");
+  //Serial.println("Temperature read: " + (String)(temp) + "; ");
+  //Serial.println("Humidity read: " + (String)(hum) + "\n");
 
   *pTemperature = temp;
   *pHumidity = hum;

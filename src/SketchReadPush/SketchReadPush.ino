@@ -16,7 +16,8 @@ extern "C" {
 // TEMPO_LOOP_READS minutes to wait between sensor reads and thingspeak uploads
 #define TEMPO_LOOP_READS 1
 
-#define ENABLE_ADC_VCC  // if uncommented, allow voltage reading
+// Ne pas decommenter car empeche la lecture de A0 en analog !!??
+//#define ENABLE_ADC_VCC  // if uncommented, allow voltage reading
 
 #define FREQUENCY 160 // CPU freq; valid 80, 160
 #define DEBUG true
@@ -82,6 +83,7 @@ Domostuff param = paramTest;
 float gVoltage = 0;
 float humidity, temp_f;   // Values read from DHT22 sensor
 float gPressure = -1, gBmpTemp;  // Values  read from BMP180 sensor
+float gPPM = -1; // values from MQ135
 unsigned long currentTime = 0; // store current time, to be read from NTP servers
 String currentTimeString = "";
 
@@ -91,7 +93,7 @@ String currentTimeString = "";
 const unsigned long BAUD_RATE = 115200; // serial connection speed
 const String LF = (String)'\x0a';
 const char *FILE_LOG = "/log.log";
-bool gisvoltage = false, gisbmp180 = false, gisdht22 = false;
+bool gisvoltage = false, gisbmp180 = false, gisdht22 = false, gisMQ135 = false;
 
 /**
  * setup()
@@ -102,8 +104,10 @@ void setup(void) {
   /**
    * init all the stuff...
    */
-  if (!initAll())
+  if (!initAll()) {
+    toSerial("Sketch initAll() returned false !");
     return; // no WIFI for instance, do nothing...
+  }
   sensorMgt.initAll();
 
   /**
@@ -118,25 +122,24 @@ void setup(void) {
     toSerial("DHT22 detected: " + (String)sensorMgt.getDHTInfo()); toSerial(LF);
   }
 
-  /*if (sensorMgt.hasMQ135()) {
-    float ppm, rzero;
-       
+  if (sensorMgt.hasMQ135()) {
+    //float ppm, rzero;       
     toSerial("MQ135 AirQuality\n");
 
-    sensorMgt.readFromMQ135(&ppm, &rzero);
+    /*sensorMgt.readFromMQ135(&ppm, &rzero);
     toSerial("ppm=" + (String)ppm + " RZero=" + (String)rzero); toSerial(LF);
     if (sensorMgt.readFromMQ135Corrected(temp_f, humidity, &ppm)) {
       toSerial("ppm corrected=" + (String)ppm); toSerial(LF);      
-    }
-  }*/
+    }*/
+  }
 
   // Selon capteur...
   toSerial("Device IP : " + WiFi.localIP().toString() + "\n");
   if (WiFi.localIP().toString() == "192.168.1.26") {
-    // THTest
-    param = paramSalon;
-  } else if (WiFi.localIP().toString() == "192.168.0.20") {
     // THSalon
+    param = paramSalon;
+  } else if (WiFi.localIP().toString() == "192.168.1.60") {
+    // THTest
     param = paramTest;
   } else {
     // Keep default param, test so far...
@@ -204,17 +207,19 @@ void loop(void) {
   gisvoltage = readVoltage(&gVoltage);
   msg = "Voltage: "; msg.concat(String(gVoltage, 2)); msg.concat(" (V)\n"); toSerial(msg);
 
-  /*if (DEBUG_LOOP && sensorMgt.hasMQ135()) {
+  if (gisMQ135 = sensorMgt.hasMQ135()) {
     float ppm, rzero;
        
     toSerial("AirQuality loop..." + LF);
  
     sensorMgt.readFromMQ135(&ppm, &rzero);
-    toSerial("ppm=" + (String)ppm + " RZero=" + (String)rzero); toSerial(LF);
+    toSerial("ppm=" + (String)ppm + " RZero=" + (String)rzero + "\n");
+    writeToFS("RZero=" + (String)rzero); /**/
     if (sensorMgt.readFromMQ135Corrected(temp_f, humidity, &ppm)) {
-      toSerial("ppm corrected=" + (String)ppm); toSerial(LF);      
+      toSerial("ppm corrected=" + (String)ppm); toSerial(LF);
+      gPPM = ppm; 
     }
-  }*/
+  }
 
   sendThingspeak();
 
@@ -298,6 +303,10 @@ void sendThingspeak() {
       // BMP180 sensor present and ok?
       if (gisbmp180 && gPressure != -1) {
         urlT += "&field4=" + String((float)gPressure) + "&field5=" + String((float)gBmpTemp);
+      }
+      // MQ135 ?
+      if (gisMQ135) {
+        urlT += "&field6=" + String(gPPM, 2);
       }
       break;
   }
@@ -471,7 +480,15 @@ void writeToFS(String str) {
     yield();
     return;
   }
-  if (currentTime != 0) timestr = " [" + (String)(currentTimeString) + "]";
+
+  time_t t = now();
+  timestr = "[" + (String)year(t) + "-" + (String)month(t) + "-" + (String)day(t) + " " + (String)hour(t) + ":" + (String)minute(t) + ":" + (String)second(t) + "] " + str;
+
+  if (!f.println(timestr)) {
+    toSerial("File write failed!\n");
+  } else {
+    toSerial("writeToFS::" + timestr);
+  }   
   f.close();
   yield();
   ESP.wdtFeed();
@@ -563,7 +580,7 @@ void readGMTTime() {
     time = ntpClient.getUnixTime();
   }
 
-  // set current syste time
+  // set current system time
   setTime((time_t)time);
 
   // set global variables
@@ -572,6 +589,5 @@ void readGMTTime() {
       + ":" + (second() < 10? "0": "") + (String)second();
   currentTime = time;
   
-  toSerial("Current Time GMT from NTP server: " );
-  toSerial(currentTimeString); toSerial(LF);  
+  toSerial("Current Time GMT from NTP server (readGMTTime): " ); toSerial(currentTimeString); toSerial(LF);  
 }

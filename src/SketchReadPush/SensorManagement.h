@@ -13,10 +13,10 @@
 //#include <DHT_U.h>
 
 #include "MQ135.h" // get from https://github.com/ViliusKraujutis/MQ135
-//#define ATMOCO2 409.01 // https://www.co2.earth/ May 15, 2017:  409.01 ppm
+#define ATMOCO2 428.54 // https://www.co2.earth/ Jan. 2, 2026:  428.54 ppm
 /// The load resistance on the board - "102" or 1k... ???
 //#define RLOAD 1.0
-//#define RZERO 788.73 // grosse difference avec les 76.63 de la librairie !!??
+#define RZERO 788.73 // grosse difference avec les 76.63 de la librairie !!??
 
 #define DHTTYPE DHT22
 #define DHTPIN D4 // PIN 2 == D4
@@ -41,7 +41,7 @@ class SensorManagement {
 
     uint32_t gDHTdelayMS = 2000;
     // Sensor MQ135 -- CO2
-    MQ135 gMQ135 = MQ135(ANALOGPIN);
+    MQ135 gMQ135 = MQ135(ANALOGPIN, RZERO);
     
   public:
     /**
