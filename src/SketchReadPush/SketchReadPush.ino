@@ -14,18 +14,17 @@ extern "C" {
 #include "SensorManagement.h"
 
 // TEMPO_LOOP_READS minutes to wait between sensor reads and thingspeak uploads
-#define TEMPO_LOOP_READS 1
+#define TEMPO_LOOP_READS 5
 
-// Ne pas decommenter car empeche la lecture de A0 en analog !!??
-//#define ENABLE_ADC_VCC  // if uncommented, allow voltage reading
+#if !HAS_MQ135
+  ADC_MODE(ADC_VCC);   // sans MQ135 : A0 sert à lire la tension
+#endif
 
-#define FREQUENCY 160 // CPU freq; valid 80, 160
+#define MQ135_WARMUP_MS (10UL * 60 * 1000)   // pas de mesure fiable avant ~10 min
+
+#define FREQUENCY SYS_CPU_80MHZ //SYS_CPU_160MHZ // CPU freq; valid 80, 160
 #define DEBUG true
 //#define DEBUG_LOOP true
-
-#ifdef ENABLE_ADC_VCC
-  ADC_MODE(ADC_VCC);
-#endif
 
 //
 // pour éviter les plantages / blocages / ???, essai des pistes données ici:
@@ -50,7 +49,6 @@ bool sendRequest(const char* host, String resource);
 bool readVoltage(float *pVoltage);
 void readGMTTime();
 void sendThingspeak();
-//void sendDomoticz();
 
 /**
  * WIFI & network stuff
@@ -59,31 +57,27 @@ WiFiClient client;
 const char* ssid     = "freebox_BPBXWW";
 const char* password = "sebspi480700";
 const char* hostTS = "api.thingspeak.com";
-//const int httpDomoticzPort = 8090;
-//const char* hostDomoticz = "192.168.0.17";
 
 /**
  * domo stuff
  */
 SensorManagement sensorMgt;
 
-enum WhichSensor { TEST = 0, SALON = 1, UKN = 2  };
+enum WhichSensor { TEST = 0, SALON = 1, BUREAU = 3, UKN = 99  };
 struct Domostuff {
   WhichSensor which;
-  //int sleepTime; // sleep time in seconds
   String channelID; // THTest
   String writeAPIKey;  // Write API Key THTest
-  //int idxDomoticz1; // Materiel: ThingSpeak THTest, type: Temp + Humidity, sous-type: THGN122/123, THGN132, THGR122/228/238/268
-  //int idxDomoticz2; // Materiel: ThingSpeak THTest, type: General, sous-type: Barometer
-  //bool hasBMP180;
 };
-Domostuff paramTest = { WhichSensor::TEST, /*300,*/ "215867", "8KD3JE2KT4XD8XHN"/*, 49, 62, false*/ };
-Domostuff paramSalon = { WhichSensor::SALON, /*(DEBUG? 300: 600),*/ "211804", "5W8JKMZZBRBAT4DX"/*, 48, 63, true*/ };
+Domostuff paramTest = { WhichSensor::TEST, /*300,*/ "215867", "8KD3JE2KT4XD8XHN"/*, false*/ };
+Domostuff paramSalon = { WhichSensor::SALON, /*(DEBUG? 300: 600),*/ "211804", "5W8JKMZZBRBAT4DX"/*, true*/ };
+Domostuff paramBureau = { WhichSensor::BUREAU, "3545671", "949QRGIHUGUTQP16" };
 Domostuff param = paramTest;
 float gVoltage = 0;
 float humidity, temp_f;   // Values read from DHT22 sensor
 float gPressure = -1, gBmpTemp;  // Values  read from BMP180 sensor
-float gPPM = -1; // values from MQ135
+float gPPM = -1, gRZeroCorr = -1, gRawA0 = -1; // values from MQ135
+float ppmHist[3] = {-1, -1, -1};
 unsigned long currentTime = 0; // store current time, to be read from NTP servers
 String currentTimeString = "";
 
@@ -99,8 +93,6 @@ bool gisvoltage = false, gisbmp180 = false, gisdht22 = false, gisMQ135 = false;
  * setup()
  */
 void setup(void) {
-  sensorMgt = SensorManagement();
-
   /**
    * init all the stuff...
    */
@@ -125,24 +117,6 @@ void setup(void) {
   if (sensorMgt.hasMQ135()) {
     //float ppm, rzero;       
     toSerial("MQ135 AirQuality\n");
-
-    /*sensorMgt.readFromMQ135(&ppm, &rzero);
-    toSerial("ppm=" + (String)ppm + " RZero=" + (String)rzero); toSerial(LF);
-    if (sensorMgt.readFromMQ135Corrected(temp_f, humidity, &ppm)) {
-      toSerial("ppm corrected=" + (String)ppm); toSerial(LF);      
-    }*/
-  }
-
-  // Selon capteur...
-  toSerial("Device IP : " + WiFi.localIP().toString() + "\n");
-  if (WiFi.localIP().toString() == "192.168.1.26") {
-    // THSalon
-    param = paramSalon;
-  } else if (WiFi.localIP().toString() == "192.168.1.60") {
-    // THTest
-    param = paramTest;
-  } else {
-    // Keep default param, test so far...
   }
 
   // dump log file (DEBUG)
@@ -156,7 +130,6 @@ void setup(void) {
   }
 
   //sendThingspeak();
-  //sendDomoticz();    
   delay(5000);
   
   // not really needed
@@ -185,6 +158,7 @@ void loop(void) {
    * read from sensors...
    */
   // read BPM180 sensor if present
+  if (!sensorMgt.hasBMP180()) sensorMgt.initBMP();
   if (sensorMgt.hasBMP180()) {
     if (gisbmp180 = sensorMgt.readFromBMP(&gPressure, &gBmpTemp)) {
       msg = "BMP180 detected: "; msg.concat(String(gPressure, 2)); msg.concat(" (hPa) "); msg.concat(String(gBmpTemp, 2)); msg.concat(" (C)\n");
@@ -194,6 +168,7 @@ void loop(void) {
     }
   }
   // read DHT22 sensor if present (supposed to be)
+  if (!sensorMgt.hasDHT()) sensorMgt.initDHT();
   if (sensorMgt.hasDHT()) {
     if (gisdht22 = sensorMgt.readFromDHT(&temp_f, &humidity)) {
       msg = "DHT22 temp: "; msg.concat(String(temp_f, 2)); msg.concat(" (C) "); msg.concat(String(humidity, 2)); msg.concat(" (%)\n");
@@ -204,47 +179,73 @@ void loop(void) {
   }
 
   // read ESP voltage
-  gisvoltage = readVoltage(&gVoltage);
-  msg = "Voltage: "; msg.concat(String(gVoltage, 2)); msg.concat(" (V)\n"); toSerial(msg);
+  gisvoltage = !HAS_MQ135 && readVoltage(&gVoltage);
+  if (gisvoltage) {
+    msg = "Voltage: "; msg.concat(String(gVoltage, 2)); msg.concat(" (V)\n");
+  } else {
+    msg = "Voltage : N/A\n";
+  }
+  toSerial(msg);
 
-  if (gisMQ135 = sensorMgt.hasMQ135()) {
-    float ppm, rzero;
-       
-    toSerial("AirQuality loop..." + LF);
- 
-    sensorMgt.readFromMQ135(&ppm, &rzero);
-    toSerial("ppm=" + (String)ppm + " RZero=" + (String)rzero + "\n");
-    writeToFS("RZero=" + (String)rzero); /**/
-    if (sensorMgt.readFromMQ135Corrected(temp_f, humidity, &ppm)) {
-      toSerial("ppm corrected=" + (String)ppm); toSerial(LF);
-      gPPM = ppm; 
-    }
+  // MQ135
+  float ppm = -1, rzero = -1, rzeroCorr = -1;
+  gRZeroCorr = -1;
+  gisMQ135 = false;
+  if (sensorMgt.hasMQ135()) {
+    //if (sensorMgt.readFromMQ135(&ppm, &rzero)) {
+      //toSerial("ppm=" + String(ppm, 1) + " RZero=" + String(rzero, 2) + "\n");
+    //}
+    if (gisdht22 && sensorMgt.readFromMQ135Corrected(temp_f, humidity, &ppm, &rzeroCorr)) {
+      ppmHist[2] = ppmHist[1]; ppmHist[1] = ppmHist[0]; ppmHist[0] = ppm;
+      if (ppmHist[2] > 0) {
+        float a = ppmHist[0], b = ppmHist[1], c = ppmHist[2];
+        gPPM = max(min(a, b), min(max(a, b), c));   // médiane de 3
+      }
+      //gPPM = ppm;
+      gRZeroCorr = rzeroCorr;
+      gRawA0 = sensorMgt.getMQ135Raw();
+      gisMQ135 = (millis() > MQ135_WARMUP_MS) && ppm > 50 /*300*/ && ppm < 10000;
+      toSerial("ppm corrected=" + String(ppm, 1) + " RZeroCorr=" + String(rzeroCorr, 2) + "\n");
+    }  
   }
 
-  sendThingspeak();
+  // Send to Thingspeak, so WIFI on then off due to MQ135 which needs stable VCC and WIFI disturbs it
+  if (!connectWiFi()) {
+    toSerial("Failed to connect to WIFI !\n");
+  } else {
+    String ip = WiFi.localIP().toString();
+    toSerial("Device IP : " + ip + "\n");
+    if (ip == "192.168.1.26")      param = paramSalon;
+    else if (ip == "192.168.1.60") param = paramBureau;
+    else param = paramTest;
+    sendThingspeak();
+    stopWiFiAndSleep();
+  }
 
-  delay(TEMPO_LOOP_READS * 1000 * 60); // toutes les minutes
+  delay(TEMPO_LOOP_READS * 1000 * 60); // toutes les TEMPO_LOOP_READS minutes
   
 } 
 /**
  * initAll
  */
 bool initAll() {
+  // Eviter l'ecriture de la config du WIFI en flash
+  WiFi.persistent(false);
   // open the Arduino IDE Serial Monitor window to see what the code is doing
   initSerial();
   // init the filesystem...
   initFS();
   // CPU Freq
-  system_update_cpu_freq(FREQUENCY); // test overclocking... ca marche bien donc let's go!
+  system_update_cpu_freq(FREQUENCY);
   toSerial("CPU Freq set to: " + (String)FREQUENCY + "\n");
 
-  // Connect to WiFi network
-  if (!connectWiFi()) {
-    return (false);  
-  }
-
   // read time
-  readGMTTime();
+  if (!connectWiFi()) {
+    toSerial("Failed to connect to WIFI !\n");
+  } else {
+    readGMTTime();
+    stopWiFiAndSleep();
+  }
 
   return (true);
 }
@@ -291,24 +292,51 @@ void sendThingspeak() {
   // We now create a URI for the request - DHT22 data
   String urlT = "/update?key=" + param.writeAPIKey;
 
+  bool  hasTemp = false;
+  float tempOut = 0;
+
   // specifics per sensor
   switch (param.which) {
 
     case WhichSensor::SALON:
-    case WhichSensor::TEST:
+    case WhichSensor::TEST: {
+
+      // Température "principale" : DHT22 si dispo, sinon BMP180
       if (gisdht22) {
-          urlT += "&field1=" + String((float)temp_f) + "&field2=" + String((float)humidity) 
-          + "&field3=" + (!gisvoltage? "": String((float)gVoltage));
+        tempOut = temp_f;  hasTemp = true;
+      } else if (gisbmp180) {
+        tempOut = gBmpTemp; hasTemp = true;
       }
-      // BMP180 sensor present and ok?
+
+      if (hasTemp)  urlT += "&field1=" + String(tempOut, 2);
+      if (gisdht22) urlT += "&field2=" + String(humidity, 2);   // l'humidité n'existe que sur le DHT22
+
+      if (gisvoltage) {
+        urlT += "&field3=" + String(gVoltage, 2);
+      }
       if (gisbmp180 && gPressure != -1) {
-        urlT += "&field4=" + String((float)gPressure) + "&field5=" + String((float)gBmpTemp);
+        urlT += "&field4=" + String(gPressure) + "&field5=" + String(gBmpTemp);
       }
-      // MQ135 ?
-      if (gisMQ135) {
-        urlT += "&field6=" + String(gPPM, 2);
-      }
+      if (gisMQ135)       urlT += "&field6=" + String(gPPM, 2);
+      if (gRZeroCorr > 0) urlT += "&field7=" + String(gRZeroCorr, 2);
+      if (gRawA0 >= 0)    urlT += "&field8=" + String(gRawA0, 1);
+
       break;
+    }
+    case WhichSensor::BUREAU: {
+
+      // Température "principale"
+      if (gisdht22) {
+        tempOut = temp_f;  hasTemp = true;
+      }
+
+      if (hasTemp)  urlT += "&field1=" + String(tempOut, 2);
+      if (gisdht22) urlT += "&field2=" + String(humidity, 2);   // l'humidité n'existe que sur le DHT22
+
+      if (gisMQ135)       urlT += "&field3=" + String(gPPM, 2);
+
+      break;
+    }
   }
 
   if (!sendRequest(hostTS, urlT)) {
@@ -482,7 +510,10 @@ void writeToFS(String str) {
   }
 
   time_t t = now();
-  timestr = "[" + (String)year(t) + "-" + (String)month(t) + "-" + (String)day(t) + " " + (String)hour(t) + ":" + (String)minute(t) + ":" + (String)second(t) + "] " + str;
+  if (year(t) != 1970) {
+    timestr = "[" + (String)year(t) + "-" + (String)month(t) + "-" + (String)day(t) + " " + (String)hour(t) + ":" + (String)minute(t) + ":" + (String)second(t) + "Z] ";
+  }
+  timestr += str;
 
   if (!f.println(timestr)) {
     toSerial("File write failed!\n");
@@ -562,7 +593,19 @@ bool sendRequest(const char* host, String resource) {
   client.println("Connection: close");     
   client.println();  
   yield();   
-  return true;  
+
+  unsigned long t0 = millis();
+  String status = "", body = "";
+  while ((client.connected() || client.available()) && millis() - t0 < 5000) {
+    if (!client.available()) { delay(10); continue; }
+    String line = client.readStringUntil('\n');
+    line.trim();
+    if (status == "") status = line;        // 1re ligne : HTTP/1.1 200 OK
+    else if (line.length()) body = line;    // dernière ligne non vide = corps
+  }
+  bool ok = status.indexOf(" 200 ") > 0 && body.toInt() > 0;
+  toSerial("TS: " + status + " -> entry " + body + (ok ? " OK\n" : " FAILED\n"));
+  return ok;
 }
 /**
  * connect to NTP and set GMT time (epoch) to global variables
@@ -571,12 +614,13 @@ void readGMTTime() {
   unsigned long time = 0; // GMT Time
 
   WiFiUDP udp;
-  EasyNTPClient ntpClient(udp, "pool.ntp.org");
+  EasyNTPClient ntpClient(udp);
+  yield();
   time = ntpClient.getUnixTime();
   yield();
 
   if (time == 0) {
-    delay(500);
+    delay(1000);
     time = ntpClient.getUnixTime();
   }
 
