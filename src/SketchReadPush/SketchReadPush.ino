@@ -213,11 +213,17 @@ void loop(void) {
   if (!connectWiFi()) {
     toSerial("Failed to connect to WIFI !\n");
   } else {
-    String ip = WiFi.localIP().toString();
-    toSerial("Device IP : " + ip + "\n");
-    if (ip == "192.168.1.26")      param = paramSalon;
-    else if (ip == "192.168.1.60") param = paramBureau;
-    else param = paramTest;
+    uint32_t id = ESP.getChipId();
+    toSerial("ChipID: " + String(id, HEX) + "\n");
+
+    if (id == 0x132f7b) {
+      param = paramSalon;
+    } else {
+      String ip = WiFi.localIP().toString();
+      toSerial("Device IP : " + ip + "\n");
+      if (ip == "192.168.1.60") param = paramBureau;
+      else param = paramTest;
+    }
     sendThingspeak();
     stopWiFiAndSleep();
   }
