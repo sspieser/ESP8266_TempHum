@@ -218,11 +218,10 @@ void loop(void) {
 
     if (id == 0x132f7b) {
       param = paramSalon;
+    } else if (id == 0x133276) {
+      param = paramBureau;
     } else {
-      String ip = WiFi.localIP().toString();
-      toSerial("Device IP : " + ip + "\n");
-      if (ip == "192.168.1.60") param = paramBureau;
-      else param = paramTest;
+      param = paramTest;
     }
     sendThingspeak();
     stopWiFiAndSleep();
