@@ -63,7 +63,10 @@ bool SensorManagement::initBMP() {
  */
 bool SensorManagement::initDHT() {
   // DHT22 temp & hum sensor
-   gDHT.begin();
+  pinMode(DHTPIN, INPUT_PULLUP);
+  delay(100);
+  //Serial.println(digitalRead(DHTPIN) ? "DATA au repos : HIGH (normal)" : "DATA au repos : LOW (anormal)"); /**/
+  gDHT.begin();
   isDHT = false;
   for (int i = 0; i < 3 && !isDHT; i++) {
     delay(gDHTdelayMS);                    // 2 s mini entre deux lectures
@@ -75,7 +78,7 @@ bool SensorManagement::initDHT() {
   yield();
   ESP.wdtFeed();
 
-  dhtInfo = "DHT22 on pin D4";
+  dhtInfo = "DHT22 on pin " + String(DHTPIN);
 
   return (isDHT);
 }

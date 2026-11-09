@@ -27,7 +27,8 @@
 #define MQ135_CORG 1.130128205
 // --- MQ135 sans bibliothèque ---
 
-#define HAS_MQ135 1 // 0 Pour les setup SANS MQ135, 1 sinon
+#define HAS_MQ135 1 // 0 Pour les setup SANS MQ135, 1 sinon ; BUREAU
+//#define HAS_MQ135 0 // 0 Pour les setup SANS MQ135, 1 sinon ; SALON
 
 #define ANALOGPIN A0
 #define ATMOCO2 428.54 // https://www.co2.earth/ Jan. 2, 2026:  428.54 ppm

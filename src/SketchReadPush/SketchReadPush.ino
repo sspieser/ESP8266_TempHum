@@ -111,7 +111,7 @@ void setup(void) {
   }
   // read DHT22 sensor if present
   if (sensorMgt.hasDHT()) {
-    toSerial("DHT22 detected: " + (String)sensorMgt.getDHTInfo()); toSerial(LF);
+    toSerial("DHT22 detected: " + sensorMgt.getDHTInfo() + "\n");
   }
 
   if (sensorMgt.hasMQ135()) {
@@ -176,6 +176,8 @@ void loop(void) {
     } else {
       toSerial("Failed to read DHT sensor !\n");
     }
+  } else {
+    toSerial("DHT22 missing or not answering\n");
   }
 
   // read ESP voltage
